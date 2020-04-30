@@ -12,11 +12,49 @@
 using namespace mlir;
 using namespace mlir::quant;
 
+
+// @IFX_PATCH@ Set min max based on num_bits and not just type.
+// Sollid work from the developers.. adjusting this will automatically
+// correct scale / clipping  etc etc.  Now if this was in a sane programming
+// language and not C++ this wouild have been "obvious".
+
+
 static bool getDefaultStorageParams(unsigned numBits, bool narrowRange,
                                     bool isSigned, MLIRContext *ctx,
                                     Type &storageType, int64_t &qmin,
                                     int64_t &qmax) {
+
+#if 1 // Scale min/max based on numBits
+  // @IFX_PATCH@ Set min/max based on *actual* num_bits
   // Hard-coded type mapping from TFLite.
+  if (numBits <= 1) {
+    return true;
+  }  else if (numBits <= 8) {
+    storageType = IntegerType::get(8, ctx);
+  } else if (numBits <= 16) {
+    storageType = IntegerType::get(16, ctx);
+  } else {
+    return true;
+  }
+  
+  if(isSigned){
+    uint64_t base_magnitude = static_cast<int64_t>(1)<<(numBits-1);
+    if(narrowRange) {
+      qmin = -(base_magnitude-1);
+    } else {
+      qmin = -base_magnitude;
+    }
+  } else {
+    qmax = (static_cast<int64_t>(1)<<numBits)-static_cast<int64_t>(1);
+    if(narrowRange) {
+      qmin = 1;
+    } else {
+      qmin = 0;
+    }
+  }
+
+#else // ORIGINIAL
+
   if (numBits <= 8) {
     storageType = IntegerType::get(8, ctx);
     if (isSigned) {
@@ -52,6 +90,8 @@ static bool getDefaultStorageParams(unsigned numBits, bool narrowRange,
   if (narrowRange) {
     qmin += 1;
   }
+#endif
+
   return false;
 }
 
@@ -118,6 +158,7 @@ mlir::quant::fakeQuantAttrsToType(Location loc, unsigned numBits, double rmin,
     return (emitError(loc, "unsupported FakeQuant number of bits: ") << numBits,
             nullptr);
   }
+  //emitRemark(loc) << "**numBits " << numBits << "qmin " << qmin << "qmax " << qmax << "\n";
 
   // Special case where min/max is close enough. The tensor contents are all
   // 0.0s, so the scale is set to 1.0 and the tensor can be quantized to zero
@@ -156,6 +197,7 @@ UniformQuantizedPerAxisType mlir::quant::fakeQuantAttrsToType(
     return (emitError(loc, "unsupported FakeQuant number of bits: ") << numBits,
             nullptr);
   }
+  //emitRemark(loc) << "**numBits " << numBits << "qmin " << qmin << "qmax " << qmax << "\n";
 
   SmallVector<double, 4> scales;
   SmallVector<int64_t, 4> zeroPoints;

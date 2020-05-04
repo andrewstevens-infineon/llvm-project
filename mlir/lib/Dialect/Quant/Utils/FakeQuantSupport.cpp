@@ -32,13 +32,16 @@ static bool getDefaultStorageParams(unsigned numBits, bool narrowRange,
   }  else if (numBits <= 8) {
     storageType = IntegerType::get(8, ctx);
   } else if (numBits <= 16) {
-    storageType = IntegerType::get(16, ctx);
+    storageType = IntegerType::get(16, ctx);  
+  } else if (numBits <= 32) {
+    storageType = IntegerType::get(32, ctx);
   } else {
     return true;
   }
   
   if(isSigned){
     uint64_t base_magnitude = static_cast<int64_t>(1)<<(numBits-1);
+    qmax = base_magnitude-1;
     if(narrowRange) {
       qmin = -(base_magnitude-1);
     } else {

@@ -221,6 +221,20 @@ struct FormatStyle {
   /// \endcode
   bool AllowAllParametersOfDeclarationOnNextLine;
 
+  /// Allow short enums on a single line.
+  /// \code
+  ///   true:
+  ///   enum { A, B } myEnum;
+  ///
+  ///   false:
+  ///   enum
+  ///   {
+  ///     A,
+  ///     B
+  ///   } myEnum;
+  /// \endcode
+  bool AllowShortEnumsOnASingleLine;
+
   /// Different styles for merging short blocks containing at most one
   /// statement.
   enum ShortBlockStyle {
@@ -1969,6 +1983,17 @@ struct FormatStyle {
     ///    }
     /// \endcode
     SBPO_ControlStatements,
+    /// Same as ``SBPO_ControlStatements`` except this option doesn't apply to
+    /// ForEach macros. This is useful in projects where ForEach macros are 
+    /// treated as function calls instead of control statements. 
+    /// \code
+    ///    void f() {
+    ///      Q_FOREACH(...) {
+    ///        f();
+    ///      }
+    ///    }
+    /// \endcode
+    SBPO_ControlStatementsExceptForEachMacros,
     /// Put a space before opening parentheses only if the parentheses are not
     /// empty i.e. '()'
     /// \code
@@ -2175,6 +2200,7 @@ struct FormatStyle {
                R.AllowAllConstructorInitializersOnNextLine &&
            AllowAllParametersOfDeclarationOnNextLine ==
                R.AllowAllParametersOfDeclarationOnNextLine &&
+           AllowShortEnumsOnASingleLine == R.AllowShortEnumsOnASingleLine &&
            AllowShortBlocksOnASingleLine == R.AllowShortBlocksOnASingleLine &&
            AllowShortCaseLabelsOnASingleLine ==
                R.AllowShortCaseLabelsOnASingleLine &&

@@ -982,6 +982,40 @@ def CmpIOp : Std_Op<"cmpi",
 }
 
 //===----------------------------------------------------------------------===//
+// CreateComplexOp
+//===----------------------------------------------------------------------===//
+
+def CreateComplexOp : Std_Op<"create_complex",
+    [NoSideEffect,
+     AllTypesMatch<["real", "imaginary"]>,
+     TypesMatchWith<"complex element type matches real operand type",
+                    "complex", "real",
+                    "$_self.cast<ComplexType>().getElementType()">,
+     TypesMatchWith<"complex element type matches imaginary operand type",
+                    "complex", "imaginary",
+                    "$_self.cast<ComplexType>().getElementType()">]> {
+  let summary = "creates a complex number";
+  let description = [{
+    The `create_complex` operation creates a complex number from two
+    floating-point operands, the real and the imaginary part.
+
+    Example:
+
+    ```mlir
+    %a = create_complex %b, %c : complex<f32>
+    ```
+  }];
+
+  let arguments = (ins AnyFloat:$real, AnyFloat:$imaginary);
+  let results = (outs Complex<AnyFloat>:$complex);
+
+  let assemblyFormat = "$real `,` $imaginary attr-dict `:` type($complex)";
+
+  // `CreateComplexOp` is fully verified by its traits.
+  let verifier = ?;
+}
+
+//===----------------------------------------------------------------------===//
 // CondBranchOp
 //===----------------------------------------------------------------------===//
 
@@ -1238,6 +1272,36 @@ def CosOp : FloatUnaryOp<"cos"> {
   }];
 }
 
+def SinOp : FloatUnaryOp<"sin"> {
+  let summary = "sine of the specified value";
+  let description = [{
+    Syntax:
+
+    ```
+    operation ::= ssa-id `=` `std.sin` ssa-use `:` type
+    ```
+
+    The `sin` operation computes the sine of a given value. It takes one
+    operand and returns one result of the same type. This type may be a float
+    scalar type, a vector whose element type is float, or a tensor of floats.
+    It has no standard attributes.
+
+    Example:
+
+    ```mlir
+    // Scalar sine value.
+    %a = sin %b : f64
+
+    // SIMD vector element-wise sine value.
+    %f = sin %g : vector<4xf32>
+
+    // Tensor element-wise sine value.
+    %x = sin %y : tensor<4x?xf8>
+    ```
+  }];
+}
+
+
 //===----------------------------------------------------------------------===//
 // DeallocOp
 //===----------------------------------------------------------------------===//
@@ -1465,6 +1529,36 @@ def FPTruncOp : CastOp<"fptrunc">, Arguments<(ins AnyType:$in)> {
   }];
 
   let hasFolder = 0;
+}
+
+//===----------------------------------------------------------------------===//
+// ImOp
+//===----------------------------------------------------------------------===//
+
+def ImOp : Std_Op<"im",
+    [NoSideEffect,
+     TypesMatchWith<"complex element type matches result type",
+                    "complex", "imaginary",
+                    "$_self.cast<ComplexType>().getElementType()">]> {
+  let summary = "extracts the imaginary part of a complex number";
+  let description = [{
+    The `im` operation takes a single complex number as its operand and extracts
+    the imaginary part as a floating-point value.
+
+    Example:
+
+    ```mlir
+    %a = im %b : complex<f32>
+    ```
+  }];
+
+  let arguments = (ins Complex<AnyFloat>:$complex);
+  let results = (outs AnyFloat:$imaginary);
+
+  let assemblyFormat = "$complex attr-dict `:` type($complex)";
+
+  // `ImOp` is fully verified by its traits.
+  let verifier = ?;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1845,6 +1939,36 @@ def RankOp : Std_Op<"rank", [NoSideEffect]> {
 
   let hasFolder = 1;
   let assemblyFormat = "operands attr-dict `:` type(operands)";
+}
+
+//===----------------------------------------------------------------------===//
+// ReOp
+//===----------------------------------------------------------------------===//
+
+def ReOp : Std_Op<"re",
+    [NoSideEffect,
+     TypesMatchWith<"complex element type matches result type",
+                    "complex", "real",
+                    "$_self.cast<ComplexType>().getElementType()">]> {
+  let summary = "extracts the real part of a complex number";
+  let description = [{
+    The `re` operation takes a single complex number as its operand and extracts
+    the real part as a floating-point value.
+
+    Example:
+
+    ```mlir
+    %a = re %b : complex<f32>
+    ```
+  }];
+
+  let arguments = (ins Complex<AnyFloat>:$complex);
+  let results = (outs AnyFloat:$real);
+
+  let assemblyFormat = "$complex attr-dict `:` type($complex)";
+
+  // `ReOp` is fully verified by its traits.
+  let verifier = ?;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2482,6 +2606,7 @@ def SubViewOp : Std_Op<"subview", [
   }];
 
   let hasCanonicalizer = 1;
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

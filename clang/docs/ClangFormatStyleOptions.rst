@@ -395,6 +395,21 @@ the configuration (without a prefix: ``Auto``).
                                               return;
                                             }
 
+**AllowShortEnumsOnASingleLine** (``bool``)
+  Allow short enums on a single line.
+
+  .. code-block:: c++
+
+    true:
+    enum { A, B } myEnum;
+
+    false:
+    enum
+    {
+      A,
+      B
+    } myEnum;
+
 **AllowShortFunctionsOnASingleLine** (``ShortFunctionStyle``)
   Dependent on the value, ``int f() { return 0; }`` can be put on a
   single line.
@@ -2317,6 +2332,19 @@ the configuration (without a prefix: ``Auto``).
 
        void f() {
          if (true) {
+           f();
+         }
+       }
+
+  * ``SBPO_ControlStatementsExceptForEachMacros`` (in configuration: ``ControlStatementsExceptForEachMacros``)
+    Same as ``SBPO_ControlStatements`` except this option doesn't apply to
+    ForEach macros. This is useful in projects where ForEach macros are
+    treated as function calls instead of control statements.
+
+    .. code-block:: c++
+
+       void f() {
+         Q_FOREACH(...) {
            f();
          }
        }

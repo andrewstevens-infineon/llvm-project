@@ -972,6 +972,17 @@ TEST_F(FormatTest, ForEachLoops) {
                "  UNKNOWN_FORACH(Item * item, itemlist) {}\n"
                "}");
 
+  FormatStyle Style = getLLVMStyle();
+  Style.SpaceBeforeParens =
+      FormatStyle::SBPO_ControlStatementsExceptForEachMacros;
+  verifyFormat("void f() {\n"
+               "  foreach(Item *item, itemlist) {}\n"
+               "  Q_FOREACH(Item *item, itemlist) {}\n"
+               "  BOOST_FOREACH(Item *item, itemlist) {}\n"
+               "  UNKNOWN_FORACH(Item * item, itemlist) {}\n"
+               "}",
+               Style);
+
   // As function-like macros.
   verifyFormat("#define foreach(x, y)\n"
                "#define Q_FOREACH(x, y)\n"
@@ -1296,6 +1307,20 @@ TEST_F(FormatTest, CaseRanges) {
                "case a ... b:\n"
                "  break;\n"
                "}");
+}
+
+TEST_F(FormatTest, ShortEnums) {
+  FormatStyle Style = getLLVMStyle();
+  Style.AllowShortEnumsOnASingleLine = true;
+  verifyFormat("enum { A, B, C } ShortEnum1, ShortEnum2;", Style);
+  Style.AllowShortEnumsOnASingleLine = false;
+  verifyFormat("enum\n"
+               "{\n"
+               "  A,\n"
+               "  B,\n"
+               "  C\n"
+               "} ShortEnum1, ShortEnum2;",
+               Style);
 }
 
 TEST_F(FormatTest, ShortCaseLabels) {
@@ -8512,6 +8537,20 @@ TEST_F(FormatTest, LayoutCxx11BraceInitializers) {
   verifyFormat("vector< int > x{ };", SpaceBetweenBraces);
 }
 
+TEST_F(FormatTest, FormatSpacesInAngles) {
+  FormatStyle SpaceInAngles = getLLVMStyle();
+  SpaceInAngles.SpacesInAngles = true;
+  verifyFormat("vector< ::std::string > x1;", SpaceInAngles);
+  verifyFormat("Foo< int, Bar > x2;", SpaceInAngles);
+  verifyFormat("Foo< ::int, ::Bar > x3;", SpaceInAngles);
+
+  SpaceInAngles.SpacesInAngles = false;
+  verifyFormat("vector<::std::string> x4;", SpaceInAngles);
+  verifyFormat("vector<int> x5;", SpaceInAngles);
+  verifyFormat("Foo<int, Bar> x6;", SpaceInAngles);
+  verifyFormat("Foo<::int, ::Bar> x7;", SpaceInAngles);
+}
+
 TEST_F(FormatTest, FormatsBracedListsInColumnLayout) {
   verifyFormat("vector<int> x = {1, 22, 333, 4444, 55555, 666666, 7777777,\n"
                "                 1, 22, 333, 4444, 55555, 666666, 7777777,\n"
@@ -12959,6 +12998,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(AllowAllConstructorInitializersOnNextLine);
   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
   CHECK_PARSE_BOOL(AllowShortCaseLabelsOnASingleLine);
+  CHECK_PARSE_BOOL(AllowShortEnumsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortLoopsOnASingleLine);
   CHECK_PARSE_BOOL(BinPackArguments);
   CHECK_PARSE_BOOL(BinPackParameters);

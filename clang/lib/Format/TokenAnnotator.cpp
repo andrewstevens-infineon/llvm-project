@@ -1852,6 +1852,10 @@ private:
     if (Style.Language == FormatStyle::LK_JavaScript)
       return TT_BinaryOperator;
 
+    // && in C# must be a binary operator.
+    if (Style.isCSharp() && Tok.is(tok::ampamp))
+      return TT_BinaryOperator;
+
     const FormatToken *PrevToken = Tok.getPreviousNonComment();
     if (!PrevToken)
       return TT_UnaryOperator;
@@ -2896,6 +2900,10 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     if ((Left.is(tok::r_paren) && Left.is(TT_AttributeParen)) ||
         (Left.is(tok::r_square) && Left.is(TT_AttributeSquare)))
       return true;
+    if (Style.SpaceBeforeParens ==
+            FormatStyle::SBPO_ControlStatementsExceptForEachMacros &&
+        Left.is(TT_ForEachMacro))
+      return false;
     return Line.Type == LT_ObjCDecl || Left.is(tok::semi) ||
            (Style.SpaceBeforeParens != FormatStyle::SBPO_Never &&
             (Left.isOneOf(tok::pp_elif, tok::kw_for, tok::kw_while,
@@ -3270,12 +3278,13 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return Right.WhitespaceRange.getBegin() != Right.WhitespaceRange.getEnd();
   if (Right.is(tok::coloncolon) &&
       !Left.isOneOf(tok::l_brace, tok::comment, tok::l_paren))
+    // Put a space between < and :: in vector< ::std::string >
     return (Left.is(TT_TemplateOpener) &&
-            Style.Standard < FormatStyle::LS_Cpp11) ||
+            (Style.Standard < FormatStyle::LS_Cpp11 || Style.SpacesInAngles)) ||
            !(Left.isOneOf(tok::l_paren, tok::r_paren, tok::l_square,
-                          tok::kw___super, TT_TemplateCloser,
-                          TT_TemplateOpener)) ||
-           (Left.is(tok ::l_paren) && Style.SpacesInParentheses);
+                          tok::kw___super, TT_TemplateOpener,
+                          TT_TemplateCloser)) ||
+           (Left.is(tok::l_paren) && Style.SpacesInParentheses);
   if ((Left.is(TT_TemplateOpener)) != (Right.is(TT_TemplateCloser)))
     return Style.SpacesInAngles;
   // Space before TT_StructuredBindingLSquare.

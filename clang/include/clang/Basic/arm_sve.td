@@ -73,7 +73,11 @@
 //
 // w: vector of element type promoted to 64bits, vector maintains
 //    signedness of its element type.
+// f: element type promoted to uint64_t (splat to vector type)
 // j: element type promoted to 64bits (splat to vector type)
+// K: element type bitcast to a signed integer (splat to vector type)
+// L: element type bitcast to an unsigned integer (splat to vector type)
+//
 // i: constant uint64_t
 // k: int32_t
 // l: int64_t
@@ -606,6 +610,13 @@ def SVPRFW_GATHER_BASES_OFFSET : MInst<"svprfw_gather[_{2}base]_index",  "vPdlJ"
 def SVPRFD_GATHER_BASES_OFFSET : MInst<"svprfd_gather[_{2}base]_index",  "vPdlJ", "UiUl", [IsGatherPrefetch], MemEltTyInt64, "aarch64_sve_prfd_gather_scalar_offset">;
 
 ////////////////////////////////////////////////////////////////////////////////
+// Scalar to vector
+
+def SVDUPQ_8  : SInst<"svdupq[_n]_{d}", "dssssssssssssssss",  "cUc", MergeNone>;
+def SVDUPQ_16 : SInst<"svdupq[_n]_{d}", "dssssssss",  "sUsh", MergeNone>;
+def SVDUPQ_32 : SInst<"svdupq[_n]_{d}", "dssss",  "iUif", MergeNone>;
+def SVDUPQ_64 : SInst<"svdupq[_n]_{d}", "dss",  "lUld", MergeNone>;
+
 // Integer arithmetic
 
 multiclass SInstZPZ<string name, string types, string intrinsic, list<FlagType> flags=[]> {
@@ -676,7 +687,43 @@ defm SVNOT  : SInstZPZ<"svnot",  "csilUcUsUiUl", "aarch64_sve_not">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Shifts
+
+multiclass SInst_SHIFT<string name, string intrinsic, string ts, string wide_ts> {
+  def _M : SInst<name # "[_{d}]", "dPdu", ts, MergeOp1,  intrinsic>;
+  def _X : SInst<name # "[_{d}]", "dPdu", ts, MergeAny,  intrinsic>;
+  def _Z : SInst<name # "[_{d}]", "dPdu", ts, MergeZero, intrinsic>;
+
+  def _N_M : SInst<name # "[_n_{d}]", "dPdL", ts, MergeOp1,  intrinsic>;
+  def _N_X : SInst<name # "[_n_{d}]", "dPdL", ts, MergeAny,  intrinsic>;
+  def _N_Z : SInst<name # "[_n_{d}]", "dPdL", ts, MergeZero, intrinsic>;
+
+  def _WIDE_M : SInst<name # _wide # "[_{d}]", "dPdg", wide_ts, MergeOp1,  intrinsic # _wide>;
+  def _WIDE_X : SInst<name # _wide # "[_{d}]", "dPdg", wide_ts, MergeAny,  intrinsic # _wide>;
+  def _WIDE_Z : SInst<name # _wide # "[_{d}]", "dPdg", wide_ts, MergeZero, intrinsic # _wide>;
+
+  def _WIDE_N_M : SInst<name # _wide # "[_n_{d}]", "dPdf", wide_ts, MergeOp1,  intrinsic # _wide>;
+  def _WIDE_N_X : SInst<name # _wide # "[_n_{d}]", "dPdf", wide_ts, MergeAny,  intrinsic # _wide>;
+  def _WIDE_N_Z : SInst<name # _wide # "[_n_{d}]", "dPdf", wide_ts, MergeZero, intrinsic # _wide>;
+}
+
+defm SVASR : SInst_SHIFT<"svasr", "aarch64_sve_asr", "csil", "csi">;
+defm SVLSL : SInst_SHIFT<"svlsl", "aarch64_sve_lsl", "csilUcUsUiUl", "csiUcUsUi">;
+defm SVLSR : SInst_SHIFT<"svlsr", "aarch64_sve_lsr", "UcUsUiUl", "UcUsUi">;
+
 def SVASRD_M : SInst<"svasrd[_n_{d}]", "dPdi", "csil",            MergeOp1,  "aarch64_sve_asrd", [], [ImmCheck<2, ImmCheckShiftRight, 1>]>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Integer reductions
+
+def SVADDV_S : SInst<"svaddv[_{d}]", "lPd", "csil",         MergeNone, "aarch64_sve_saddv">;
+def SVADDV_U : SInst<"svaddv[_{d}]", "nPd", "UcUsUiUl",     MergeNone, "aarch64_sve_uaddv">;
+def SVANDV   : SInst<"svandv[_{d}]", "sPd", "csilUcUsUiUl", MergeNone, "aarch64_sve_andv">;
+def SVEORV   : SInst<"sveorv[_{d}]", "sPd", "csilUcUsUiUl", MergeNone, "aarch64_sve_eorv">;
+def SVMAXV_S : SInst<"svmaxv[_{d}]", "sPd", "csil",         MergeNone, "aarch64_sve_smaxv">;
+def SVMAXV_U : SInst<"svmaxv[_{d}]", "sPd", "UcUsUiUl",     MergeNone, "aarch64_sve_umaxv">;
+def SVMINV_S : SInst<"svminv[_{d}]", "sPd", "csil",         MergeNone, "aarch64_sve_sminv">;
+def SVMINV_U : SInst<"svminv[_{d}]", "sPd", "UcUsUiUl",     MergeNone, "aarch64_sve_uminv">;
+def SVORV    : SInst<"svorv[_{d}]",  "sPd", "csilUcUsUiUl", MergeNone, "aarch64_sve_orv">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Integer comparisons
@@ -786,7 +833,41 @@ defm SVREVW : SInstZPZ<"svrevw", "lUl",          "aarch64_sve_revw">;
 defm SVABS_F : SInstZPZ<"svabs", "hfd", "aarch64_sve_fabs">;
 defm SVNEG_F : SInstZPZ<"svneg", "hfd", "aarch64_sve_fneg">;
 
+defm SVABD_F  : SInstZPZZ<"svabd",  "hfd", "aarch64_sve_fabd">;
+defm SVADD_F  : SInstZPZZ<"svadd",  "hfd", "aarch64_sve_fadd">;
+defm SVDIV_F  : SInstZPZZ<"svdiv",  "hfd", "aarch64_sve_fdiv">;
+defm SVDIVR_F : SInstZPZZ<"svdivr", "hfd", "aarch64_sve_fdivr">;
+defm SVMAX_F  : SInstZPZZ<"svmax",  "hfd", "aarch64_sve_fmax">;
+defm SVMAXNM  : SInstZPZZ<"svmaxnm","hfd", "aarch64_sve_fmaxnm">;
+defm SVMIN_F  : SInstZPZZ<"svmin",  "hfd", "aarch64_sve_fmin">;
+defm SVMINNM  : SInstZPZZ<"svminnm","hfd", "aarch64_sve_fminnm">;
+defm SVMUL_F  : SInstZPZZ<"svmul",  "hfd", "aarch64_sve_fmul">;
+defm SVMULX   : SInstZPZZ<"svmulx", "hfd", "aarch64_sve_fmulx">;
+defm SVSUB_F  : SInstZPZZ<"svsub",  "hfd", "aarch64_sve_fsub">;
+defm SVSUBR_F : SInstZPZZ<"svsubr", "hfd", "aarch64_sve_fsubr">;
+
+defm SVRECPX : SInstZPZ<"svrecpx", "hfd", "aarch64_sve_frecpx">;
+defm SVRINTA : SInstZPZ<"svrinta", "hfd", "aarch64_sve_frinta">;
+defm SVRINTI : SInstZPZ<"svrinti", "hfd", "aarch64_sve_frinti">;
+defm SVRINTM : SInstZPZ<"svrintm", "hfd", "aarch64_sve_frintm">;
+defm SVRINTN : SInstZPZ<"svrintn", "hfd", "aarch64_sve_frintn">;
+defm SVRINTP : SInstZPZ<"svrintp", "hfd", "aarch64_sve_frintp">;
+defm SVRINTX : SInstZPZ<"svrintx", "hfd", "aarch64_sve_frintx">;
+defm SVRINTZ : SInstZPZ<"svrintz", "hfd", "aarch64_sve_frintz">;
+defm SVSQRT  : SInstZPZ<"svsqrt",  "hfd", "aarch64_sve_fsqrt">;
+
+def SVEXPA  : SInst<"svexpa[_{d}]",  "du",   "hfd", MergeNone, "aarch64_sve_fexpa_x">;
 def SVTMAD  : SInst<"svtmad[_{d}]",  "dddi", "hfd", MergeNone, "aarch64_sve_ftmad_x", [], [ImmCheck<2, ImmCheck0_7>]>;
+def SVTSMUL : SInst<"svtsmul[_{d}]", "ddu",  "hfd", MergeNone, "aarch64_sve_ftsmul_x">;
+def SVTSSEL : SInst<"svtssel[_{d}]", "ddu",  "hfd", MergeNone, "aarch64_sve_ftssel_x">;
+
+def SVSCALE_M   : SInst<"svscale[_{d}]",   "dPdx", "hfd", MergeOp1,  "aarch64_sve_fscale">;
+def SVSCALE_X   : SInst<"svscale[_{d}]",   "dPdx", "hfd", MergeAny,  "aarch64_sve_fscale">;
+def SVSCALE_Z   : SInst<"svscale[_{d}]",   "dPdx", "hfd", MergeZero, "aarch64_sve_fscale">;
+
+def SVSCALE_N_M : SInst<"svscale[_n_{d}]", "dPdK", "hfd", MergeOp1,  "aarch64_sve_fscale">;
+def SVSCALE_N_X : SInst<"svscale[_n_{d}]", "dPdK", "hfd", MergeAny,  "aarch64_sve_fscale">;
+def SVSCALE_N_Z : SInst<"svscale[_n_{d}]", "dPdK", "hfd", MergeZero, "aarch64_sve_fscale">;
 
 defm SVMAD_F  : SInstZPZZZ<"svmad",  "hfd", "aarch64_sve_fmad">;
 defm SVMLA_F  : SInstZPZZZ<"svmla",  "hfd", "aarch64_sve_fmla">;
@@ -797,10 +878,33 @@ defm SVNMLA_F : SInstZPZZZ<"svnmla", "hfd", "aarch64_sve_fnmla">;
 defm SVNMLS_F : SInstZPZZZ<"svnmls", "hfd", "aarch64_sve_fnmls">;
 defm SVNMSB_F : SInstZPZZZ<"svnmsb", "hfd", "aarch64_sve_fnmsb">;
 
+def SVCADD_M : SInst<"svcadd[_{d}]", "dPddi",  "hfd", MergeOp1,  "aarch64_sve_fcadd", [], [ImmCheck<3, ImmCheckComplexRot90_270>]>;
+def SVCADD_X : SInst<"svcadd[_{d}]", "dPddi",  "hfd", MergeAny,  "aarch64_sve_fcadd", [], [ImmCheck<3, ImmCheckComplexRot90_270>]>;
+def SVCADD_Z : SInst<"svcadd[_{d}]", "dPddi",  "hfd", MergeZero, "aarch64_sve_fcadd", [], [ImmCheck<3, ImmCheckComplexRot90_270>]>;
+def SVCMLA_M : SInst<"svcmla[_{d}]", "dPdddi", "hfd", MergeOp1,  "aarch64_sve_fcmla", [], [ImmCheck<4, ImmCheckComplexRotAll90>]>;
+def SVCMLA_X : SInst<"svcmla[_{d}]", "dPdddi", "hfd", MergeAny,  "aarch64_sve_fcmla", [], [ImmCheck<4, ImmCheckComplexRotAll90>]>;
+def SVCMLA_Z : SInst<"svcmla[_{d}]", "dPdddi", "hfd", MergeZero, "aarch64_sve_fcmla", [], [ImmCheck<4, ImmCheckComplexRotAll90>]>;
+
 def SVCMLA_LANE : SInst<"svcmla_lane[_{d}]", "ddddii", "hf",  MergeNone, "aarch64_sve_fcmla_lane", [], [ImmCheck<3, ImmCheckLaneIndexCompRotate, 2>,
                                                                                                         ImmCheck<4, ImmCheckComplexRotAll90>]>;
 def SVMLA_LANE  : SInst<"svmla_lane[_{d}]",  "ddddi",  "hfd", MergeNone, "aarch64_sve_fmla_lane", [], [ImmCheck<3, ImmCheckLaneIndex, 2>]>;
 def SVMLS_LANE  : SInst<"svmls_lane[_{d}]",  "ddddi",  "hfd", MergeNone, "aarch64_sve_fmls_lane", [], [ImmCheck<3, ImmCheckLaneIndex, 2>]>;
+def SVMUL_LANE  : SInst<"svmul_lane[_{d}]",  "dddi",   "hfd", MergeNone, "aarch64_sve_fmul_lane", [], [ImmCheck<2, ImmCheckLaneIndex, 1>]>;
+
+def SVRECPE  : SInst<"svrecpe[_{d}]",  "dd",  "hfd", MergeNone, "aarch64_sve_frecpe_x">;
+def SVRECPS  : SInst<"svrecps[_{d}]",  "ddd", "hfd", MergeNone, "aarch64_sve_frecps_x">;
+def SVRSQRTE : SInst<"svrsqrte[_{d}]", "dd",  "hfd", MergeNone, "aarch64_sve_frsqrte_x">;
+def SVRSQRTS : SInst<"svrsqrts[_{d}]", "ddd", "hfd", MergeNone, "aarch64_sve_frsqrts_x">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Floating-point reductions
+
+def SVFADDA   : SInst<"svadda[_{d}]",   "sPsd", "hfd", MergeNone, "aarch64_sve_fadda">;
+def SVFADDV   : SInst<"svaddv[_{d}]",   "sPd",  "hfd", MergeNone, "aarch64_sve_faddv">;
+def SVFMAXV   : SInst<"svmaxv[_{d}]",   "sPd",  "hfd", MergeNone, "aarch64_sve_fmaxv">;
+def SVFMAXNMV : SInst<"svmaxnmv[_{d}]", "sPd",  "hfd", MergeNone, "aarch64_sve_fmaxnmv">;
+def SVFMINV   : SInst<"svminv[_{d}]",   "sPd",  "hfd", MergeNone, "aarch64_sve_fminv">;
+def SVFMINNMV : SInst<"svminnmv[_{d}]", "sPd",  "hfd", MergeNone, "aarch64_sve_fminnmv">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Floating-point comparisons
@@ -928,9 +1032,6 @@ def SVCVTXNT_F32    : SInst<"svcvtxnt_f32[_f64]", "MMPd", "d", MergeOp1, "aarch6
 
 }
 
-def SVCADD_M : SInst<"svcadd[_{d}]", "dPddi",  "hfd", MergeOp1,  "aarch64_sve_fcadd", [], [ImmCheck<3, ImmCheckComplexRot90_270>]>;
-def SVCMLA_M : SInst<"svcmla[_{d}]", "dPdddi", "hfd", MergeOp1,  "aarch64_sve_fcmla", [], [ImmCheck<4, ImmCheckComplexRotAll90>]>;
-
 ////////////////////////////////////////////////////////////////////////////////
 // Permutations and selection
 
@@ -940,7 +1041,7 @@ def SVCLASTB     : SInst<"svclastb[_{d}]",    "dPdd", "csilUcUsUiUlhfd", MergeNo
 def SVCLASTB_N   : SInst<"svclastb[_n_{d}]",  "sPsd", "csilUcUsUiUlhfd", MergeNone, "aarch64_sve_clastb_n">;
 def SVCOMPACT    : SInst<"svcompact[_{d}]",   "dPd",  "ilUiUlfd",        MergeNone, "aarch64_sve_compact">;
 //  SVDUP_LANE    (to land in D78750)
-//  SVDUPQ_LANE   (to land in D78750)
+def SVDUPQ_LANE  : SInst<"svdupq_lane[_{d}]", "ddn",  "csilUcUsUiUlhfd", MergeNone, "aarch64_sve_dupq_lane">;
 def SVEXT        : SInst<"svext[_{d}]",       "dddi", "csilUcUsUiUlhfd", MergeNone, "aarch64_sve_ext", [], [ImmCheck<2, ImmCheckExtract, 1>]>;
 def SVLASTA      : SInst<"svlasta[_{d}]",     "sPd",  "csilUcUsUiUlhfd", MergeNone, "aarch64_sve_lasta">;
 def SVLASTB      : SInst<"svlastb[_{d}]",     "sPd",  "csilUcUsUiUlhfd", MergeNone, "aarch64_sve_lastb">;
@@ -977,6 +1078,12 @@ def SVPFALSE : SInst<"svpfalse[_b]", "P", "", MergeNone, "", [IsOverloadNone]>;
 
 def SVPTRUE_PAT : SInst<"svptrue_pat_{d}", "PI", "PcPsPiPl", MergeNone, "aarch64_sve_ptrue">;
 def SVPTRUE     : SInst<"svptrue_{d}",     "P",  "PcPsPiPl", MergeNone, "aarch64_sve_ptrue", [IsAppendSVALL]>;
+
+def SVDUPQ_B8      : SInst<"svdupq[_n]_{d}",  "Pssssssssssssssss",  "Pc", MergeNone>;
+def SVDUPQ_B16     : SInst<"svdupq[_n]_{d}", "Pssssssss",  "Ps", MergeNone>;
+def SVDUPQ_B32     : SInst<"svdupq[_n]_{d}", "Pssss",  "Pi", MergeNone>;
+def SVDUPQ_B64     : SInst<"svdupq[_n]_{d}", "Pss",  "Pl", MergeNone>;
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Predicate operations

@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestDialect.h"
-#include "mlir/Conversion/StandardToStandard/StandardToStandard.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/StandardOps/Transforms/FuncConversions.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -97,9 +97,9 @@ static void invokeCreateWithInferredReturnType(Operation *op) {
     for (int j = 0; j < e; ++j) {
       std::array<Value, 2> values = {{fop.getArgument(i), fop.getArgument(j)}};
       SmallVector<Type, 2> inferredReturnTypes;
-      if (succeeded(OpTy::inferReturnTypes(context, llvm::None, values,
-                                           op->getAttrs(), op->getRegions(),
-                                           inferredReturnTypes))) {
+      if (succeeded(OpTy::inferReturnTypes(
+              context, llvm::None, values, op->getAttrDictionary(),
+              op->getRegions(), inferredReturnTypes))) {
         OperationState state(location, OpTy::getOperationName());
         // TODO(jpienaar): Expand to regions.
         OpTy::build(b, state, values, op->getAttrs());

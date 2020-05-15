@@ -1931,6 +1931,7 @@ static void writeDICompositeType(raw_ostream &Out, const DICompositeType *N,
   Printer.printMetadata("templateParams", N->getRawTemplateParams());
   Printer.printString("identifier", N->getIdentifier());
   Printer.printMetadata("discriminator", N->getRawDiscriminator());
+  Printer.printMetadata("dataLocation", N->getRawDataLocation());
   Out << ")";
 }
 
@@ -2103,6 +2104,8 @@ static void writeDIModule(raw_ostream &Out, const DIModule *N,
   Printer.printString("configMacros", N->getConfigurationMacros());
   Printer.printString("includePath", N->getIncludePath());
   Printer.printString("apinotes", N->getAPINotesFile());
+  Printer.printMetadata("file", N->getRawFile());
+  Printer.printInt("line", N->getLineNo());
   Out << ")";
 }
 

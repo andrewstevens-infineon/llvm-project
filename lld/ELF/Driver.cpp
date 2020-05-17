@@ -43,7 +43,6 @@
 #include "lld/Common/Memory.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
-#include "lld/Common/Threads.h"
 #include "lld/Common/Version.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -53,6 +52,7 @@
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
@@ -90,8 +90,10 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
 
   inputSections.clear();
   outputSections.clear();
+  archiveFiles.clear();
   binaryFiles.clear();
   bitcodeFiles.clear();
+  lazyObjFiles.clear();
   objectFiles.clear();
   sharedFiles.clear();
   backwardReferences.clear();
@@ -954,6 +956,7 @@ static void readConfigs(opt::InputArgList &args) {
       args.hasFlag(OPT_print_icf_sections, OPT_no_print_icf_sections, false);
   config->printGcSections =
       args.hasFlag(OPT_print_gc_sections, OPT_no_print_gc_sections, false);
+  config->printArchiveStats = args.getLastArgValue(OPT_print_archive_stats);
   config->printSymbolOrder =
       args.getLastArgValue(OPT_print_symbol_order);
   config->rpath = getRpath(args);
@@ -964,7 +967,7 @@ static void readConfigs(opt::InputArgList &args) {
   config->searchPaths = args::getStrings(args, OPT_library_path);
   config->sectionStartMap = getSectionStartMap(args);
   config->shared = args.hasArg(OPT_shared);
-  config->singleRoRx = args.hasArg(OPT_no_rosegment);
+  config->singleRoRx = !args.hasFlag(OPT_rosegment, OPT_no_rosegment, true);
   config->soName = args.getLastArgValue(OPT_soname);
   config->sortSection = getSortSection(args);
   config->splitStackAdjustSize = args::getInteger(args, OPT_split_stack_adjust_size, 16384);

@@ -336,6 +336,9 @@ public:
   bool FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI, Register Reg,
                      MachineRegisterInfo *MRI) const override;
 
+  bool onlyFoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
+                         Register Reg) const;
+
   // If conversion by predication (only supported by some branch instructions).
   // All of the profitability checks always return true; it is always
   // profitable to use the predicated branches.
@@ -363,8 +366,6 @@ public:
 
   // Predication support.
   bool isPredicated(const MachineInstr &MI) const override;
-
-  bool isUnpredicatedTerminator(const MachineInstr &MI) const override;
 
   bool PredicateInstruction(MachineInstr &MI,
                             ArrayRef<MachineOperand> Pred) const override;

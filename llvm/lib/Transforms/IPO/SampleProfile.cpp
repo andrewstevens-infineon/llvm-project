@@ -944,7 +944,7 @@ void SampleProfileLoader::emitOptimizationRemarksForInlineCandidates(
   for (auto I : Candidates) {
     Function *CalledFunction = I->getCalledFunction();
     if (CalledFunction) {
-      ORE->emit(OptimizationRemarkAnalysis(CSINLINE_DEBUG, "InlineAttempt", 
+      ORE->emit(OptimizationRemarkAnalysis(CSINLINE_DEBUG, "InlineAttempt",
                                            I->getDebugLoc(), I->getParent())
                 << "previous inlining reattempted for "
                 << (Hot ? "hotness: '" : "size: '")
@@ -1025,7 +1025,7 @@ bool SampleProfileLoader::inlineHotFunctions(
                                      PSI->getOrCompHotCountThreshold());
             continue;
           }
-          auto CalleeFunctionName = FS->getFuncNameInModule(F.getParent());
+          auto CalleeFunctionName = FS->getFuncName();
           // If it is a recursive call, we do not inline it as it could bloat
           // the code exponentially. There is way to better handle this, e.g.
           // clone the caller first, and inline the cloned caller if it is
@@ -1044,13 +1044,13 @@ bool SampleProfileLoader::inlineHotFunctions(
               R->getValue()->getSubprogram() &&
               isLegalToPromote(*I, R->getValue(), &Reason)) {
             uint64_t C = FS->getEntrySamples();
-            Instruction *DI =
-                pgo::promoteIndirectCall(I, R->getValue(), C, Sum, false, ORE);
+            auto &DI =
+                pgo::promoteIndirectCall(*I, R->getValue(), C, Sum, false, ORE);
             Sum -= C;
             PromotedInsns.insert(I);
             // If profile mismatches, we should not attempt to inline DI.
             if ((isa<CallInst>(DI) || isa<InvokeInst>(DI)) &&
-                inlineCallInstruction(*cast<CallBase>(DI))) {
+                inlineCallInstruction(cast<CallBase>(DI))) {
               localNotInlinedCallSites.erase(I);
               LocalChanged = true;
               ++NumCSInlined;

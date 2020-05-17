@@ -719,7 +719,6 @@ def SignlessIntegerOrFloatLike : TypeConstraint<Or<[
     SignlessIntegerLike.predicate, FloatLike.predicate]>,
     "signless-integer-like or floating-point-like">;
 
-
 //===----------------------------------------------------------------------===//
 // Attribute definitions
 //===----------------------------------------------------------------------===//
@@ -1188,15 +1187,16 @@ class BitEnumAttr<string name, string description,
 //===----------------------------------------------------------------------===//
 // Composite attribute kinds
 
-class DictionaryAttrBase : Attr<CPred<"$_self.isa<DictionaryAttr>()">,
-                          "dictionary of named attribute values"> {
+class DictionaryAttrBase<Pred condition, string description> :
+    Attr<condition, description> {
   let storageType = [{ DictionaryAttr }];
   let returnType = [{ DictionaryAttr }];
   let valueType = NoneType;
   let convertFromStorage = "$_self";
 }
 
-def DictionaryAttr : DictionaryAttrBase;
+def DictionaryAttr : DictionaryAttrBase<CPred<"$_self.isa<DictionaryAttr>()">,
+                                        "dictionary of named attribute values">;
 
 class ElementsAttrBase<Pred condition, string description> :
     Attr<condition, description> {
@@ -1380,7 +1380,11 @@ class StructFieldAttr<string thisName, Attr thisType> {
 // validation method and set of accessors for a fixed set of fields. This is
 // useful when representing data that would normally be in a structure.
 class StructAttr<string name, Dialect dialect,
-                 list<StructFieldAttr> attributes> : DictionaryAttrBase {
+                 list<StructFieldAttr> attributes> :
+    DictionaryAttrBase<CPred<"$_self.isa<" # name # ">()">,
+        "DictionaryAttr with field(s): " #
+        StrJoin<!foreach(a, attributes, "'" # a.name # "'"), ", ">.result #
+        " (each field having its own constraints)"> {
   // Name for this StructAttr.
   string className = name;
 
@@ -1435,7 +1439,7 @@ class DerivedAttr<code ret, code b, code convert = ""> :
   let returnType = ret;
   code body = b;
 
-  // Specify how to convert from the derived attribute to an attibute.
+  // Specify how to convert from the derived attribute to an attribute.
   //
   // ## Special placeholders
   //
@@ -1628,6 +1632,8 @@ class PredOpTrait<string descr, Pred pred> : OpTrait {
   Pred predicate = pred;
 }
 
+// Op defines an affine scope.
+def AffineScope : NativeOpTrait<"AffineScope">;
 // Op defines an automatic allocation scope.
 def AutomaticAllocationScope : NativeOpTrait<"AutomaticAllocationScope">;
 // Op supports operand broadcast behavior.
@@ -1773,12 +1779,20 @@ class OpInterface<string name> : OpInterfaceTrait<name> {
 
 // Whether to declare the op interface methods in the op's header. This class
 // simply wraps an OpInterface but is used to indicate that the method
-// declarations should be generated.
-class DeclareOpInterfaceMethods<OpInterface interface> :
-  OpInterface<interface.cppClassName> {
+// declarations should be generated. This class takes an optional set of methods
+// that should have declarations generated even if the method has a default
+// implementation.
+class DeclareOpInterfaceMethods<OpInterface interface,
+                                list<string> overridenMethods = []>
+      : OpInterface<interface.cppClassName> {
     let description = interface.description;
     let cppClassName = interface.cppClassName;
     let methods = interface.methods;
+
+    // This field contains a set of method names that should always have their
+    // declarations generated. This allows for generating declarations for
+    // methods with default implementations that need to be overridden.
+    list<string> alwaysOverriddenMethods = overridenMethods;
 }
 
 //===----------------------------------------------------------------------===//

@@ -193,16 +193,27 @@ def V_SET_INACTIVE_B64 : VPseudoInstSI <(outs VReg_64:$vdst),
   let Constraints = "$src = $vdst";
 }
 
+let usesCustomInserter = 1, Defs = [VCC, EXEC] in {
+def V_ADD_U64_PSEUDO : VPseudoInstSI <
+  (outs VReg_64:$vdst), (ins VSrc_b64:$src0, VSrc_b64:$src1),
+  [(set VReg_64:$vdst, (getDivergentFrag<add>.ret i64:$src0, i64:$src1))]
+>;
+
+def V_SUB_U64_PSEUDO : VPseudoInstSI <
+  (outs VReg_64:$vdst), (ins VSrc_b64:$src0, VSrc_b64:$src1),
+  [(set VReg_64:$vdst, (getDivergentFrag<sub>.ret i64:$src0, i64:$src1))]
+>;
+} // End usesCustomInserter = 1, Defs = [VCC, EXEC]
 
 let usesCustomInserter = 1, Defs = [SCC] in {
 def S_ADD_U64_PSEUDO : SPseudoInstSI <
-  (outs SReg_64:$vdst), (ins SSrc_b64:$src0, SSrc_b64:$src1),
-  [(set SReg_64:$vdst, (add i64:$src0, i64:$src1))]
+  (outs SReg_64:$sdst), (ins SSrc_b64:$src0, SSrc_b64:$src1),
+  [(set SReg_64:$sdst, (UniformBinFrag<add> i64:$src0, i64:$src1))]
 >;
 
 def S_SUB_U64_PSEUDO : SPseudoInstSI <
-  (outs SReg_64:$vdst), (ins SSrc_b64:$src0, SSrc_b64:$src1),
-  [(set SReg_64:$vdst, (sub i64:$src0, i64:$src1))]
+  (outs SReg_64:$sdst), (ins SSrc_b64:$src0, SSrc_b64:$src1),
+  [(set SReg_64:$sdst, (UniformBinFrag<sub> i64:$src0, i64:$src1))]
 >;
 
 def S_ADD_U64_CO_PSEUDO : SPseudoInstSI <
@@ -212,6 +223,23 @@ def S_ADD_U64_CO_PSEUDO : SPseudoInstSI <
 def S_SUB_U64_CO_PSEUDO : SPseudoInstSI <
   (outs SReg_64:$vdst, VOPDstS64orS32:$sdst), (ins SSrc_b64:$src0, SSrc_b64:$src1)
 >;
+
+def S_ADD_CO_PSEUDO : SPseudoInstSI <
+  (outs SReg_32:$sdst, SSrc_i1:$scc_out), (ins SSrc_b32:$src0, SSrc_b32:$src1, SSrc_i1:$scc_in)
+>;
+
+def S_SUB_CO_PSEUDO : SPseudoInstSI <
+  (outs SReg_32:$sdst, SSrc_i1:$scc_out), (ins SSrc_b32:$src0, SSrc_b32:$src1, SSrc_i1:$scc_in)
+>;
+
+def S_UADDO_PSEUDO : SPseudoInstSI <
+  (outs SReg_32:$sdst, SSrc_i1:$scc_out), (ins SSrc_b32:$src0, SSrc_b32:$src1)
+>;
+
+def S_USUBO_PSEUDO : SPseudoInstSI <
+  (outs SReg_32:$sdst, SSrc_i1:$scc_out), (ins SSrc_b32:$src0, SSrc_b32:$src1)
+>;
+
 } // End usesCustomInserter = 1, Defs = [SCC]
 
 let usesCustomInserter = 1 in {
@@ -1149,10 +1177,31 @@ def : BitConvert <v8i32, v8f32, SReg_256>;
 def : BitConvert <v8f32, v8i32, SReg_256>;
 def : BitConvert <v8i32, v8f32, VReg_256>;
 def : BitConvert <v8f32, v8i32, VReg_256>;
+def : BitConvert <v4i64, v4f64, VReg_256>;
+def : BitConvert <v4f64, v4i64, VReg_256>;
+def : BitConvert <v4i64, v8i32, VReg_256>;
+def : BitConvert <v4i64, v8f32, VReg_256>;
+def : BitConvert <v4f64, v8i32, VReg_256>;
+def : BitConvert <v4f64, v8f32, VReg_256>;
+def : BitConvert <v8i32, v4i64, VReg_256>;
+def : BitConvert <v8f32, v4i64, VReg_256>;
+def : BitConvert <v8i32, v4f64, VReg_256>;
+def : BitConvert <v8f32, v4f64, VReg_256>;
+
 
 // 512-bit bitcast
 def : BitConvert <v16i32, v16f32, VReg_512>;
 def : BitConvert <v16f32, v16i32, VReg_512>;
+def : BitConvert <v8i64,  v8f64, VReg_512>;
+def : BitConvert <v8f64,  v8i64, VReg_512>;
+def : BitConvert <v8i64,  v16i32, VReg_512>;
+def : BitConvert <v8f64,  v16i32, VReg_512>;
+def : BitConvert <v16i32, v8i64,  VReg_512>;
+def : BitConvert <v16i32, v8f64,  VReg_512>;
+def : BitConvert <v8i64,  v16f32, VReg_512>;
+def : BitConvert <v8f64,  v16f32, VReg_512>;
+def : BitConvert <v16f32, v8i64,  VReg_512>;
+def : BitConvert <v16f32, v8f64,  VReg_512>;
 
 // 1024-bit bitcast
 def : BitConvert <v32i32, v32f32, VReg_1024>;

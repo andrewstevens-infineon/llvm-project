@@ -2103,6 +2103,8 @@ static void writeDIModule(raw_ostream &Out, const DIModule *N,
   Printer.printString("configMacros", N->getConfigurationMacros());
   Printer.printString("includePath", N->getIncludePath());
   Printer.printString("apinotes", N->getAPINotesFile());
+  Printer.printMetadata("file", N->getRawFile());
+  Printer.printInt("line", N->getLineNo());
   Out << ")";
 }
 
@@ -4197,8 +4199,9 @@ void AssemblyWriter::writeAttribute(const Attribute &Attr, bool InAttrGroup) {
     return;
   }
 
-  assert(Attr.hasAttribute(Attribute::ByVal) ||
-         Attr.hasAttribute(Attribute::Preallocated) && "unexpected type attr");
+  assert((Attr.hasAttribute(Attribute::ByVal) ||
+          Attr.hasAttribute(Attribute::Preallocated)) &&
+         "unexpected type attr");
 
   if (Attr.hasAttribute(Attribute::ByVal)) {
     Out << "byval";

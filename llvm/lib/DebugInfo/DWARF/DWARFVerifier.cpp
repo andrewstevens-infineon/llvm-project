@@ -457,9 +457,15 @@ unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
   case DW_AT_ranges:
     // Make sure the offset in the DW_AT_ranges attribute is valid.
     if (auto SectionOffset = AttrValue.Value.getAsSectionOffset()) {
-      if (*SectionOffset >= DObj.getRangesSection().Data.size())
-        ReportError("DW_AT_ranges offset is beyond .debug_ranges bounds: " +
-                    llvm::formatv("{0:x8}", *SectionOffset));
+      unsigned DwarfVersion = Die.getDwarfUnit()->getVersion();
+      const DWARFSection &RangeSection = DwarfVersion < 5
+                                             ? DObj.getRangesSection()
+                                             : DObj.getRnglistsSection();
+      if (*SectionOffset >= RangeSection.Data.size())
+        ReportError(
+            "DW_AT_ranges offset is beyond " +
+            StringRef(DwarfVersion < 5 ? ".debug_ranges" : ".debug_rnglists") +
+            " bounds: " + llvm::formatv("{0:x8}", *SectionOffset));
       break;
     }
     ReportError("DIE has invalid DW_AT_ranges encoding:");
@@ -480,7 +486,8 @@ unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
       DWARFUnit *U = Die.getDwarfUnit();
       for (const auto &Entry : *Loc) {
         DataExtractor Data(toStringRef(Entry.Expr), DCtx.isLittleEndian(), 0);
-        DWARFExpression Expression(Data, U->getAddressByteSize());
+        DWARFExpression Expression(Data, U->getAddressByteSize(),
+                                   U->getFormParams().Format);
         bool Error = any_of(Expression, [](DWARFExpression::Operation &Op) {
           return Op.isError();
         });
@@ -1288,7 +1295,8 @@ static bool isVariableIndexable(const DWARFDie &Die, DWARFContext &DCtx) {
   for (const auto &Entry : *Loc) {
     DataExtractor Data(toStringRef(Entry.Expr), DCtx.isLittleEndian(),
                        U->getAddressByteSize());
-    DWARFExpression Expression(Data, U->getAddressByteSize());
+    DWARFExpression Expression(Data, U->getAddressByteSize(),
+                               U->getFormParams().Format);
     bool IsInteresting = any_of(Expression, [](DWARFExpression::Operation &Op) {
       return !Op.isError() && (Op.getCode() == DW_OP_addr ||
                                Op.getCode() == DW_OP_form_tls_address ||

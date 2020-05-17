@@ -122,6 +122,9 @@ public:
 
   virtual ~UniformQuantizedValueConverter() {}
 
+  double getScale() const { return scaleDouble; }
+  double getZeroPoint() const { return zeroPointDouble; }
+  uint32_t getStorageBitWidth() const { return storageBitWidth; }
 private:
   // An optimized implementation to quantize f32 to i8/u8 with C++ native
   // arithmetic.

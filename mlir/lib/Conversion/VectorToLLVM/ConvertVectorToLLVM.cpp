@@ -34,14 +34,6 @@
 using namespace mlir;
 using namespace mlir::vector;
 
-template <typename T>
-static LLVM::LLVMType getPtrToElementType(T containerType,
-                                          LLVMTypeConverter &typeConverter) {
-  return typeConverter.convertType(containerType.getElementType())
-      .template cast<LLVM::LLVMType>()
-      .getPointerTo();
-}
-
 // Helper to reduce vector type by one rank at front.
 static VectorType reducedVectorTypeFront(VectorType tp) {
   assert((tp.getRank() > 1) && "unlowerable vector type");
@@ -110,7 +102,7 @@ static Value extractOne(PatternRewriter &rewriter, Location loc, Value vector,
 }
 
 // Helper that returns a subset of `arrayAttr` as a vector of int64_t.
-// TODO(rriddle): Better support for attribute subtype forwarding + slicing.
+// TODO: Better support for attribute subtype forwarding + slicing.
 static SmallVector<int64_t, 4> getI64SubArray(ArrayAttr arrayAttr,
                                               unsigned dropFront = 0,
                                               unsigned dropBack = 0) {
@@ -124,11 +116,12 @@ static SmallVector<int64_t, 4> getI64SubArray(ArrayAttr arrayAttr,
   return res;
 }
 
-template <typename TransferOp>
-LogicalResult getVectorTransferAlignment(LLVMTypeConverter &typeConverter,
-                                         TransferOp xferOp, unsigned &align) {
+// Helper that returns data layout alignment of an operation with memref.
+template <typename T>
+LogicalResult getMemRefAlignment(LLVMTypeConverter &typeConverter, T op,
+                                 unsigned &align) {
   Type elementTy =
-      typeConverter.convertType(xferOp.getMemRefType().getElementType());
+      typeConverter.convertType(op.getMemRefType().getElementType());
   if (!elementTy)
     return failure();
 
@@ -138,12 +131,41 @@ LogicalResult getVectorTransferAlignment(LLVMTypeConverter &typeConverter,
   return success();
 }
 
+// Helper that returns vector of pointers given a base and an index vector.
+LogicalResult getIndexedPtrs(ConversionPatternRewriter &rewriter,
+                             LLVMTypeConverter &typeConverter, Location loc,
+                             Value memref, Value indices, MemRefType memRefType,
+                             VectorType vType, Type iType, Value &ptrs) {
+  // Inspect stride and offset structure.
+  //
+  // TODO: flat memory only for now, generalize
+  //
+  int64_t offset;
+  SmallVector<int64_t, 4> strides;
+  auto successStrides = getStridesAndOffset(memRefType, strides, offset);
+  if (failed(successStrides) || strides.size() != 1 || strides[0] != 1 ||
+      offset != 0 || memRefType.getMemorySpace() != 0)
+    return failure();
+
+  // Create a vector of pointers from base and indices.
+  MemRefDescriptor memRefDescriptor(memref);
+  Value base = memRefDescriptor.alignedPtr(rewriter, loc);
+  int64_t size = vType.getDimSize(0);
+  auto pType = memRefDescriptor.getElementType();
+  auto ptrsType = LLVM::LLVMType::getVectorTy(pType, size);
+  ptrs = rewriter.create<LLVM::GEPOp>(loc, ptrsType, base, indices);
+  return success();
+}
+
 static LogicalResult
 replaceTransferOpWithLoadOrStore(ConversionPatternRewriter &rewriter,
                                  LLVMTypeConverter &typeConverter, Location loc,
                                  TransferReadOp xferOp,
                                  ArrayRef<Value> operands, Value dataPtr) {
-  rewriter.replaceOpWithNewOp<LLVM::LoadOp>(xferOp, dataPtr);
+  unsigned align;
+  if (failed(getMemRefAlignment(typeConverter, xferOp, align)))
+    return failure();
+  rewriter.replaceOpWithNewOp<LLVM::LoadOp>(xferOp, dataPtr, align);
   return success();
 }
 
@@ -162,7 +184,7 @@ replaceTransferOpWithMasked(ConversionPatternRewriter &rewriter,
     return failure();
 
   unsigned align;
-  if (failed(getVectorTransferAlignment(typeConverter, xferOp, align)))
+  if (failed(getMemRefAlignment(typeConverter, xferOp, align)))
     return failure();
 
   rewriter.replaceOpWithNewOp<LLVM::MaskedLoadOp>(
@@ -176,8 +198,12 @@ replaceTransferOpWithLoadOrStore(ConversionPatternRewriter &rewriter,
                                  LLVMTypeConverter &typeConverter, Location loc,
                                  TransferWriteOp xferOp,
                                  ArrayRef<Value> operands, Value dataPtr) {
+  unsigned align;
+  if (failed(getMemRefAlignment(typeConverter, xferOp, align)))
+    return failure();
   auto adaptor = TransferWriteOpAdaptor(operands);
-  rewriter.replaceOpWithNewOp<LLVM::StoreOp>(xferOp, adaptor.vector(), dataPtr);
+  rewriter.replaceOpWithNewOp<LLVM::StoreOp>(xferOp, adaptor.vector(), dataPtr,
+                                             align);
   return success();
 }
 
@@ -187,7 +213,7 @@ replaceTransferOpWithMasked(ConversionPatternRewriter &rewriter,
                             TransferWriteOp xferOp, ArrayRef<Value> operands,
                             Value dataPtr, Value mask) {
   unsigned align;
-  if (failed(getVectorTransferAlignment(typeConverter, xferOp, align)))
+  if (failed(getMemRefAlignment(typeConverter, xferOp, align)))
     return failure();
 
   auto adaptor = TransferWriteOpAdaptor(operands);
@@ -252,12 +278,91 @@ public:
   }
 };
 
+/// Conversion pattern for a vector.gather.
+class VectorGatherOpConversion : public ConvertToLLVMPattern {
+public:
+  explicit VectorGatherOpConversion(MLIRContext *context,
+                                    LLVMTypeConverter &typeConverter)
+      : ConvertToLLVMPattern(vector::GatherOp::getOperationName(), context,
+                             typeConverter) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto gather = cast<vector::GatherOp>(op);
+    auto adaptor = vector::GatherOpAdaptor(operands);
+
+    // Resolve alignment.
+    unsigned align;
+    if (failed(getMemRefAlignment(typeConverter, gather, align)))
+      return failure();
+
+    // Get index ptrs.
+    VectorType vType = gather.getResultVectorType();
+    Type iType = gather.getIndicesVectorType().getElementType();
+    Value ptrs;
+    if (failed(getIndexedPtrs(rewriter, typeConverter, loc, adaptor.base(),
+                              adaptor.indices(), gather.getMemRefType(), vType,
+                              iType, ptrs)))
+      return failure();
+
+    // Replace with the gather intrinsic.
+    ValueRange v = (llvm::size(adaptor.pass_thru()) == 0) ? ValueRange({})
+                                                          : adaptor.pass_thru();
+    rewriter.replaceOpWithNewOp<LLVM::masked_gather>(
+        gather, typeConverter.convertType(vType), ptrs, adaptor.mask(), v,
+        rewriter.getI32IntegerAttr(align));
+    return success();
+  }
+};
+
+/// Conversion pattern for a vector.scatter.
+class VectorScatterOpConversion : public ConvertToLLVMPattern {
+public:
+  explicit VectorScatterOpConversion(MLIRContext *context,
+                                     LLVMTypeConverter &typeConverter)
+      : ConvertToLLVMPattern(vector::ScatterOp::getOperationName(), context,
+                             typeConverter) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto scatter = cast<vector::ScatterOp>(op);
+    auto adaptor = vector::ScatterOpAdaptor(operands);
+
+    // Resolve alignment.
+    unsigned align;
+    if (failed(getMemRefAlignment(typeConverter, scatter, align)))
+      return failure();
+
+    // Get index ptrs.
+    VectorType vType = scatter.getValueVectorType();
+    Type iType = scatter.getIndicesVectorType().getElementType();
+    Value ptrs;
+    if (failed(getIndexedPtrs(rewriter, typeConverter, loc, adaptor.base(),
+                              adaptor.indices(), scatter.getMemRefType(), vType,
+                              iType, ptrs)))
+      return failure();
+
+    // Replace with the scatter intrinsic.
+    rewriter.replaceOpWithNewOp<LLVM::masked_scatter>(
+        scatter, adaptor.value(), ptrs, adaptor.mask(),
+        rewriter.getI32IntegerAttr(align));
+    return success();
+  }
+};
+
+/// Conversion pattern for all vector reductions.
 class VectorReductionOpConversion : public ConvertToLLVMPattern {
 public:
   explicit VectorReductionOpConversion(MLIRContext *context,
-                                       LLVMTypeConverter &typeConverter)
+                                       LLVMTypeConverter &typeConverter,
+                                       bool reassociateFP)
       : ConvertToLLVMPattern(vector::ReductionOp::getOperationName(), context,
-                             typeConverter) {}
+                             typeConverter),
+        reassociateFPReductions(reassociateFP) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
@@ -302,7 +407,8 @@ public:
                                               op->getLoc(), llvmType,
                                               rewriter.getZeroAttr(eltType));
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fadd>(
-            op, llvmType, acc, operands[0]);
+            op, llvmType, acc, operands[0],
+            rewriter.getBoolAttr(reassociateFPReductions));
       } else if (kind == "mul") {
         // Optional accumulator (or one).
         Value acc = operands.size() > 1
@@ -311,7 +417,8 @@ public:
                               op->getLoc(), llvmType,
                               rewriter.getFloatAttr(eltType, 1.0));
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fmul>(
-            op, llvmType, acc, operands[0]);
+            op, llvmType, acc, operands[0],
+            rewriter.getBoolAttr(reassociateFPReductions));
       } else if (kind == "min")
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_fmin>(
             op, llvmType, operands[0]);
@@ -324,6 +431,9 @@ public:
     }
     return failure();
   }
+
+private:
+  const bool reassociateFPReductions;
 };
 
 class VectorShuffleOpConversion : public ConvertToLLVMPattern {
@@ -474,7 +584,7 @@ public:
 /// ```
 /// is converted to:
 /// ```
-///  llvm.intr.fma %va, %va, %va:
+///  llvm.intr.fmuladd %va, %va, %va:
 ///    (!llvm<"<8 x float>">, !llvm<"<8 x float>">, !llvm<"<8 x float>">)
 ///    -> !llvm<"<8 x float>">
 /// ```
@@ -493,8 +603,8 @@ public:
     VectorType vType = fmaOp.getVectorType();
     if (vType.getRank() != 1)
       return failure();
-    rewriter.replaceOpWithNewOp<LLVM::FMAOp>(op, adaptor.lhs(), adaptor.rhs(),
-                                             adaptor.acc());
+    rewriter.replaceOpWithNewOp<LLVM::FMulAddOp>(op, adaptor.lhs(),
+                                                 adaptor.rhs(), adaptor.acc());
     return success();
   }
 };
@@ -920,7 +1030,7 @@ public:
         loc, toLLVMTy(vectorCmpType), linearIndices);
 
     // 3. Create offsetVector = [ offset + 0 .. offset + vector_length - 1 ].
-    // TODO(ntv, ajcbik): when the leaf transfer rank is k > 1 we need the last
+    // TODO: when the leaf transfer rank is k > 1 we need the last
     // `k` dimensions here.
     unsigned lastIndex = llvm::size(xferOp.indices()) - 1;
     Value offsetIndex = *(xferOp.indices().begin() + lastIndex);
@@ -961,7 +1071,7 @@ public:
   // output of any shaped and dimensioned vector. Due to full unrolling,
   // this approach is less suited for very large vectors though.
   //
-  // TODO(ajcbik): rely solely on libc in future? something else?
+  // TODO: rely solely on libc in future? something else?
   //
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
@@ -1139,16 +1249,18 @@ public:
 
 /// Populate the given list with patterns that convert from Vector to LLVM.
 void mlir::populateVectorToLLVMConversionPatterns(
-    LLVMTypeConverter &converter, OwningRewritePatternList &patterns) {
+    LLVMTypeConverter &converter, OwningRewritePatternList &patterns,
+    bool reassociateFPReductions) {
   MLIRContext *ctx = converter.getDialect()->getContext();
   // clang-format off
   patterns.insert<VectorFMAOpNDRewritePattern,
                   VectorInsertStridedSliceOpDifferentRankRewritePattern,
                   VectorInsertStridedSliceOpSameRankRewritePattern,
                   VectorStridedSliceOpConversion>(ctx);
+  patterns.insert<VectorReductionOpConversion>(
+      ctx, converter, reassociateFPReductions);
   patterns
-      .insert<VectorReductionOpConversion,
-              VectorShuffleOpConversion,
+      .insert<VectorShuffleOpConversion,
               VectorExtractElementOpConversion,
               VectorExtractOpConversion,
               VectorFMAOp1DConversion,
@@ -1157,7 +1269,9 @@ void mlir::populateVectorToLLVMConversionPatterns(
               VectorPrintOpConversion,
               VectorTransferConversion<TransferReadOp>,
               VectorTransferConversion<TransferWriteOp>,
-              VectorTypeCastOpConversion>(ctx, converter);
+              VectorTypeCastOpConversion,
+              VectorGatherOpConversion,
+              VectorScatterOpConversion>(ctx, converter);
   // clang-format on
 }
 
@@ -1171,6 +1285,9 @@ void mlir::populateVectorToLLVMMatrixConversionPatterns(
 namespace {
 struct LowerVectorToLLVMPass
     : public ConvertVectorToLLVMBase<LowerVectorToLLVMPass> {
+  LowerVectorToLLVMPass(const LowerVectorToLLVMOptions &options) {
+    this->reassociateFPReductions = options.reassociateFPReductions;
+  }
   void runOnOperation() override;
 };
 } // namespace
@@ -1190,7 +1307,8 @@ void LowerVectorToLLVMPass::runOnOperation() {
   LLVMTypeConverter converter(&getContext());
   OwningRewritePatternList patterns;
   populateVectorToLLVMMatrixConversionPatterns(converter, patterns);
-  populateVectorToLLVMConversionPatterns(converter, patterns);
+  populateVectorToLLVMConversionPatterns(converter, patterns,
+                                         reassociateFPReductions);
   populateVectorToLLVMMatrixConversionPatterns(converter, patterns);
   populateStdToLLVMConversionPatterns(converter, patterns);
 
@@ -1200,6 +1318,7 @@ void LowerVectorToLLVMPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<ModuleOp>> mlir::createConvertVectorToLLVMPass() {
-  return std::make_unique<LowerVectorToLLVMPass>();
+std::unique_ptr<OperationPass<ModuleOp>>
+mlir::createConvertVectorToLLVMPass(const LowerVectorToLLVMOptions &options) {
+  return std::make_unique<LowerVectorToLLVMPass>(options);
 }

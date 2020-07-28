@@ -528,6 +528,8 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
       Dumper->printCOFFResources();
     if (opts::COFFLoadConfig)
       Dumper->printCOFFLoadConfig();
+    if (opts::CGProfile)
+      Dumper->printCGProfile();
     if (opts::Addrsig)
       Dumper->printAddrsig();
     if (opts::CodeView)
@@ -688,6 +690,11 @@ int main(int argc, const char *argv[]) {
 
   cl::ParseCommandLineOptions(argc, argv, "LLVM Object Reader\n");
 
+  // Default to print error if no filename is specified.
+  if (opts::InputFilenames.empty()) {
+    error("no input files specified");
+  }
+
   if (opts::All) {
     opts::FileHeaders = true;
     opts::ProgramHeaders = true;
@@ -711,10 +718,6 @@ int main(int argc, const char *argv[]) {
     opts::ProgramHeaders = true;
     opts::SectionHeaders = true;
   }
-
-  // Default to stdin if no filename is specified.
-  if (opts::InputFilenames.empty())
-    opts::InputFilenames.push_back("-");
 
   ScopedPrinter Writer(fouts());
   for (const std::string &I : opts::InputFilenames)

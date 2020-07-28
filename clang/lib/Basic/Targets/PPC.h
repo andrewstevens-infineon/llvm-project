@@ -343,13 +343,20 @@ public:
   const char *getFloat128Mangling() const override { return "u9__ieee128"; }
 
   bool hasExtIntType() const override { return true; }
+
+  bool isSPRegName(StringRef RegName) const override {
+    return RegName.equals("r1") || RegName.equals("x1");
+  }
 };
 
 class LLVM_LIBRARY_VISIBILITY PPC32TargetInfo : public PPCTargetInfo {
 public:
   PPC32TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : PPCTargetInfo(Triple, Opts) {
-    resetDataLayout("E-m:e-p:32:32-i64:64-n32");
+    if (Triple.isOSAIX())
+      resetDataLayout("E-m:a-p:32:32-i64:64-n32");
+    else
+      resetDataLayout("E-m:e-p:32:32-i64:64-n32");
 
     switch (getTriple().getOS()) {
     case llvm::Triple::Linux:
@@ -364,13 +371,16 @@ public:
       PtrDiffType = SignedLong;
       IntPtrType = SignedLong;
       SuitableAlign = 64;
+      LongDoubleWidth = 64;
+      LongDoubleAlign = DoubleAlign = 32;
+      LongDoubleFormat = &llvm::APFloat::IEEEdouble();
       break;
     default:
       break;
     }
 
     if (Triple.isOSFreeBSD() || Triple.isOSNetBSD() || Triple.isOSOpenBSD() ||
-        Triple.getOS() == llvm::Triple::AIX || Triple.isMusl()) {
+        Triple.isMusl()) {
       LongDoubleWidth = LongDoubleAlign = 64;
       LongDoubleFormat = &llvm::APFloat::IEEEdouble();
     }
@@ -395,7 +405,14 @@ public:
     IntMaxType = SignedLong;
     Int64Type = SignedLong;
 
-    if ((Triple.getArch() == llvm::Triple::ppc64le)) {
+    if (Triple.isOSAIX()) {
+      // TODO: Set appropriate ABI for AIX platform.
+      resetDataLayout("E-m:a-i64:64-n32:64");
+      SuitableAlign = 64;
+      LongDoubleWidth = 64;
+      LongDoubleAlign = DoubleAlign = 32;
+      LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+    } else if ((Triple.getArch() == llvm::Triple::ppc64le)) {
       resetDataLayout("e-m:e-i64:64-n32:64");
       ABI = "elfv2";
     } else {
@@ -403,11 +420,7 @@ public:
       ABI = "elfv1";
     }
 
-    if (Triple.getOS() == llvm::Triple::AIX)
-      SuitableAlign = 64;
-
-    if (Triple.isOSFreeBSD() || Triple.getOS() == llvm::Triple::AIX ||
-        Triple.isMusl()) {
+    if (Triple.isOSFreeBSD() || Triple.isMusl()) {
       LongDoubleWidth = LongDoubleAlign = 64;
       LongDoubleFormat = &llvm::APFloat::IEEEdouble();
     }

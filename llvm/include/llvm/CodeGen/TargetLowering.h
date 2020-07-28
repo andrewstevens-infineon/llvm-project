@@ -278,6 +278,7 @@ public:
     bool IsSRet : 1;
     bool IsNest : 1;
     bool IsByVal : 1;
+    bool IsByRef : 1;
     bool IsInAlloca : 1;
     bool IsPreallocated : 1;
     bool IsReturned : 1;
@@ -290,7 +291,7 @@ public:
 
     ArgListEntry()
         : IsSExt(false), IsZExt(false), IsInReg(false), IsSRet(false),
-          IsNest(false), IsByVal(false), IsInAlloca(false),
+          IsNest(false), IsByVal(false), IsByRef(false), IsInAlloca(false),
           IsPreallocated(false), IsReturned(false), IsSwiftSelf(false),
           IsSwiftError(false), IsCFGuardTarget(false) {}
 
@@ -1472,7 +1473,7 @@ public:
   /// type has the alignment requirement of another type.
   virtual Align getABIAlignmentForCallingConv(Type *ArgTy,
                                               DataLayout DL) const {
-    return Align(DL.getABITypeAlignment(ArgTy));
+    return DL.getABITypeAlign(ArgTy);
   }
 
   /// If true, then instruction selection should seek to shrink the FP constant
@@ -1594,7 +1595,7 @@ public:
   /// (as defined by the target).
   bool allowsMemoryAccessForAlignment(
       LLVMContext &Context, const DataLayout &DL, EVT VT,
-      unsigned AddrSpace = 0, unsigned Alignment = 1,
+      unsigned AddrSpace = 0, Align Alignment = Align(1),
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
       bool *Fast = nullptr) const;
 
@@ -1613,7 +1614,7 @@ public:
   /// target).
   virtual bool
   allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, EVT VT,
-                     unsigned AddrSpace = 0, unsigned Alignment = 1,
+                     unsigned AddrSpace = 0, Align Alignment = Align(1),
                      MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
                      bool *Fast = nullptr) const;
 
@@ -2572,7 +2573,7 @@ public:
   /// this information should not be provided because it will generate more
   /// loads.
   virtual bool hasPairedLoad(EVT /*LoadedType*/,
-                             unsigned & /*RequiredAlignment*/) const {
+                             Align & /*RequiredAlignment*/) const {
     return false;
   }
 
@@ -3254,13 +3255,20 @@ public:
   /// constant integer.  If so, check to see if there are any bits set in the
   /// constant that are not demanded.  If so, shrink the constant and return
   /// true.
-  bool ShrinkDemandedConstant(SDValue Op, const APInt &Demanded,
+  bool ShrinkDemandedConstant(SDValue Op, const APInt &DemandedBits,
+                              const APInt &DemandedElts,
+                              TargetLoweringOpt &TLO) const;
+
+  /// Helper wrapper around ShrinkDemandedConstant, demanding all elements.
+  bool ShrinkDemandedConstant(SDValue Op, const APInt &DemandedBits,
                               TargetLoweringOpt &TLO) const;
 
   // Target hook to do target-specific const optimization, which is called by
   // ShrinkDemandedConstant. This function should return true if the target
   // doesn't want ShrinkDemandedConstant to further optimize the constant.
-  virtual bool targetShrinkDemandedConstant(SDValue Op, const APInt &Demanded,
+  virtual bool targetShrinkDemandedConstant(SDValue Op,
+                                            const APInt &DemandedBits,
+                                            const APInt &DemandedElts,
                                             TargetLoweringOpt &TLO) const {
     return false;
   }
@@ -3314,6 +3322,13 @@ public:
   SDValue SimplifyMultipleUseDemandedBits(SDValue Op, const APInt &DemandedBits,
                                           SelectionDAG &DAG,
                                           unsigned Depth = 0) const;
+
+  /// Helper wrapper around SimplifyMultipleUseDemandedBits, demanding all
+  /// bits from only some vector elements.
+  SDValue SimplifyMultipleUseDemandedVectorElts(SDValue Op,
+                                                const APInt &DemandedElts,
+                                                SelectionDAG &DAG,
+                                                unsigned Depth = 0) const;
 
   /// Look at Vector Op. At this point, we know that only the DemandedElts
   /// elements of the result of Op are ever used downstream.  If we can use
@@ -4413,6 +4428,10 @@ public:
   /// Expand a VECREDUCE_* into an explicit calculation. If Count is specified,
   /// only the first Count elements of the vector are used.
   SDValue expandVecReduce(SDNode *Node, SelectionDAG &DAG) const;
+
+  /// Expand an SREM or UREM using SDIV/UDIV or SDIVREM/UDIVREM, if legal.
+  /// Returns true if the expansion was successful.
+  bool expandREM(SDNode *Node, SDValue &Result, SelectionDAG &DAG) const;
 
   //===--------------------------------------------------------------------===//
   // Instruction Emitting Hooks

@@ -85,7 +85,7 @@ static void getVGPRSpillLaneOrTempRegister(MachineFunction &MF,
   // 1: If there is already a VGPR with free lanes, use it. We
   // may already have to pay the penalty for spilling a CSR VGPR.
   if (MFI->haveFreeLanesForSGPRSpill(MF, 1)) {
-    int NewFI = FrameInfo.CreateStackObject(4, 4, true, nullptr,
+    int NewFI = FrameInfo.CreateStackObject(4, Align(4), true, nullptr,
                                             TargetStackID::SGPRSpill);
 
     if (!MFI->allocateSGPRSpillToVGPR(MF, NewFI))
@@ -105,7 +105,7 @@ static void getVGPRSpillLaneOrTempRegister(MachineFunction &MF,
       MF.getRegInfo(), LiveRegs, AMDGPU::SReg_32_XM0_XEXECRegClass, true);
 
   if (!TempSGPR) {
-    int NewFI = FrameInfo.CreateStackObject(4, 4, true, nullptr,
+    int NewFI = FrameInfo.CreateStackObject(4, Align(4), true, nullptr,
                                             TargetStackID::SGPRSpill);
 
     if (MFI->allocateSGPRSpillToVGPR(MF, NewFI)) {
@@ -274,6 +274,7 @@ void SIFrameLowering::emitEntryFunctionFlatScratchInit(
       return;
     }
 
+    // For GFX9.
     BuildMI(MBB, I, DL, TII->get(AMDGPU::S_ADD_U32), AMDGPU::FLAT_SCR_LO)
       .addReg(FlatScrInitLo)
       .addReg(ScratchWaveOffsetReg);
@@ -284,7 +285,7 @@ void SIFrameLowering::emitEntryFunctionFlatScratchInit(
     return;
   }
 
-  assert(ST.getGeneration() < AMDGPUSubtarget::GFX10);
+  assert(ST.getGeneration() < AMDGPUSubtarget::GFX9);
 
   // Copy the size in bytes.
   BuildMI(MBB, I, DL, TII->get(AMDGPU::COPY), AMDGPU::FLAT_SCR_LO)
@@ -1119,9 +1120,8 @@ void SIFrameLowering::processFunctionBeforeFrameFinalized(
       RS->addScavengingFrameIndex(ScavengeFI);
     } else {
       int ScavengeFI = MFI.CreateStackObject(
-        TRI->getSpillSize(AMDGPU::SGPR_32RegClass),
-        TRI->getSpillAlignment(AMDGPU::SGPR_32RegClass),
-        false);
+          TRI->getSpillSize(AMDGPU::SGPR_32RegClass),
+          TRI->getSpillAlign(AMDGPU::SGPR_32RegClass), false);
       RS->addScavengingFrameIndex(ScavengeFI);
     }
   }

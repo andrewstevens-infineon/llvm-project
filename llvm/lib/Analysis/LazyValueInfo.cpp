@@ -330,11 +330,11 @@ public:
   LazyValueInfoAnnotatedWriter(LazyValueInfoImpl *L, DominatorTree &DTree)
       : LVIImpl(L), DT(DTree) {}
 
-  virtual void emitBasicBlockStartAnnot(const BasicBlock *BB,
-                                        formatted_raw_ostream &OS);
+  void emitBasicBlockStartAnnot(const BasicBlock *BB,
+                                formatted_raw_ostream &OS) override;
 
-  virtual void emitInstructionAnnot(const Instruction *I,
-                                    formatted_raw_ostream &OS);
+  void emitInstructionAnnot(const Instruction *I,
+                            formatted_raw_ostream &OS) override;
 };
 }
 namespace {
@@ -388,8 +388,8 @@ class LazyValueInfoImpl {
                                                        BasicBlock *BB);
   Optional<ValueLatticeElement> solveBlockValueSelect(SelectInst *S,
                                                       BasicBlock *BB);
-  Optional<ConstantRange> getRangeForOperand(unsigned Op, Instruction *I,
-                                             BasicBlock *BB);
+  Optional<ConstantRange> getRangeFor(Value *V, Instruction *CxtI,
+                                      BasicBlock *BB);
   Optional<ValueLatticeElement> solveBlockValueBinaryOpImpl(
       Instruction *I, BasicBlock *BB,
       std::function<ConstantRange(const ConstantRange &,
@@ -919,20 +919,19 @@ Optional<ValueLatticeElement> LazyValueInfoImpl::solveBlockValueSelect(
   return Result;
 }
 
-Optional<ConstantRange> LazyValueInfoImpl::getRangeForOperand(unsigned Op,
-                                                              Instruction *I,
-                                                              BasicBlock *BB) {
-  Optional<ValueLatticeElement> OptVal = getBlockValue(I->getOperand(Op), BB);
+Optional<ConstantRange> LazyValueInfoImpl::getRangeFor(Value *V,
+                                                       Instruction *CxtI,
+                                                       BasicBlock *BB) {
+  Optional<ValueLatticeElement> OptVal = getBlockValue(V, BB);
   if (!OptVal)
     return None;
 
   ValueLatticeElement &Val = *OptVal;
-  intersectAssumeOrGuardBlockValueConstantRange(I->getOperand(Op), Val, I);
+  intersectAssumeOrGuardBlockValueConstantRange(V, Val, CxtI);
   if (Val.isConstantRange())
     return Val.getConstantRange();
 
-  const unsigned OperandBitWidth =
-    DL.getTypeSizeInBits(I->getOperand(Op)->getType());
+  const unsigned OperandBitWidth = DL.getTypeSizeInBits(V->getType());
   return ConstantRange::getFull(OperandBitWidth);
 }
 
@@ -962,7 +961,7 @@ Optional<ValueLatticeElement> LazyValueInfoImpl::solveBlockValueCast(
   // Figure out the range of the LHS.  If that fails, we still apply the
   // transfer rule on the full set since we may be able to locally infer
   // interesting facts.
-  Optional<ConstantRange> LHSRes = getRangeForOperand(0, CI, BB);
+  Optional<ConstantRange> LHSRes = getRangeFor(CI->getOperand(0), CI, BB);
   if (!LHSRes.hasValue())
     // More work to do before applying this transfer rule.
     return None;
@@ -985,8 +984,8 @@ Optional<ValueLatticeElement> LazyValueInfoImpl::solveBlockValueBinaryOpImpl(
   // conservative range, but apply the transfer rule anyways.  This
   // lets us pick up facts from expressions like "and i32 (call i32
   // @foo()), 32"
-  Optional<ConstantRange> LHSRes = getRangeForOperand(0, I, BB);
-  Optional<ConstantRange> RHSRes = getRangeForOperand(1, I, BB);
+  Optional<ConstantRange> LHSRes = getRangeFor(I->getOperand(0), I, BB);
+  Optional<ConstantRange> RHSRes = getRangeFor(I->getOperand(1), I, BB);
   if (!LHSRes.hasValue() || !RHSRes.hasValue())
     // More work to do before applying this transfer rule.
     return None;
@@ -1093,17 +1092,41 @@ Optional<ValueLatticeElement> LazyValueInfoImpl::solveBlockValueExtractValue(
   return ValueLatticeElement::getOverdefined();
 }
 
+static bool matchICmpOperand(const APInt *&Offset, Value *LHS, Value *Val,
+                             ICmpInst::Predicate Pred) {
+  if (LHS == Val)
+    return true;
+
+  // Handle range checking idiom produced by InstCombine. We will subtract the
+  // offset from the allowed range for RHS in this case.
+  if (match(LHS, m_Add(m_Specific(Val), m_APInt(Offset))))
+    return true;
+
+  // If (x | y) < C, then (x < C) && (y < C).
+  if (match(LHS, m_c_Or(m_Specific(Val), m_Value())) &&
+      (Pred == ICmpInst::ICMP_ULT || Pred == ICmpInst::ICMP_ULE))
+    return true;
+
+  // If (x & y) > C, then (x > C) && (y > C).
+  if (match(LHS, m_c_And(m_Specific(Val), m_Value())) &&
+      (Pred == ICmpInst::ICMP_UGT || Pred == ICmpInst::ICMP_UGE))
+    return true;
+
+  return false;
+}
+
 static ValueLatticeElement getValueFromICmpCondition(Value *Val, ICmpInst *ICI,
                                                      bool isTrueDest) {
   Value *LHS = ICI->getOperand(0);
   Value *RHS = ICI->getOperand(1);
-  CmpInst::Predicate Predicate = ICI->getPredicate();
+
+  // Get the predicate that must hold along the considered edge.
+  CmpInst::Predicate EdgePred =
+      isTrueDest ? ICI->getPredicate() : ICI->getInversePredicate();
 
   if (isa<Constant>(RHS)) {
     if (ICI->isEquality() && LHS == Val) {
-      // We know that V has the RHS constant if this is a true SETEQ or
-      // false SETNE.
-      if (isTrueDest == (Predicate == ICmpInst::ICMP_EQ))
+      if (EdgePred == ICmpInst::ICMP_EQ)
         return ValueLatticeElement::get(cast<Constant>(RHS));
       else if (!isa<UndefValue>(RHS))
         return ValueLatticeElement::getNot(cast<Constant>(RHS));
@@ -1113,47 +1136,31 @@ static ValueLatticeElement getValueFromICmpCondition(Value *Val, ICmpInst *ICI,
   if (!Val->getType()->isIntegerTy())
     return ValueLatticeElement::getOverdefined();
 
-  // Use ConstantRange::makeAllowedICmpRegion in order to determine the possible
-  // range of Val guaranteed by the condition. Recognize comparisons in the from
-  // of:
-  //  icmp <pred> Val, ...
-  //  icmp <pred> (add Val, Offset), ...
-  // The latter is the range checking idiom that InstCombine produces. Subtract
-  // the offset from the allowed range for RHS in this case.
-
-  // Val or (add Val, Offset) can be on either hand of the comparison
-  if (LHS != Val && !match(LHS, m_Add(m_Specific(Val), m_ConstantInt()))) {
+  const APInt *Offset = nullptr;
+  if (!matchICmpOperand(Offset, LHS, Val, EdgePred)) {
     std::swap(LHS, RHS);
-    Predicate = CmpInst::getSwappedPredicate(Predicate);
+    EdgePred = CmpInst::getSwappedPredicate(EdgePred);
+    if (!matchICmpOperand(Offset, LHS, Val, EdgePred))
+      return ValueLatticeElement::getOverdefined();
   }
 
-  ConstantInt *Offset = nullptr;
-  if (LHS != Val)
-    match(LHS, m_Add(m_Specific(Val), m_ConstantInt(Offset)));
+  // Calculate the range of values that are allowed by the comparison.
+  ConstantRange RHSRange(RHS->getType()->getIntegerBitWidth(),
+                         /*isFullSet=*/true);
+  if (ConstantInt *CI = dyn_cast<ConstantInt>(RHS))
+    RHSRange = ConstantRange(CI->getValue());
+  else if (Instruction *I = dyn_cast<Instruction>(RHS))
+    if (auto *Ranges = I->getMetadata(LLVMContext::MD_range))
+      RHSRange = getConstantRangeFromMetadata(*Ranges);
 
-  if (LHS == Val || Offset) {
-    // Calculate the range of values that are allowed by the comparison
-    ConstantRange RHSRange(RHS->getType()->getIntegerBitWidth(),
-                           /*isFullSet=*/true);
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(RHS))
-      RHSRange = ConstantRange(CI->getValue());
-    else if (Instruction *I = dyn_cast<Instruction>(RHS))
-      if (auto *Ranges = I->getMetadata(LLVMContext::MD_range))
-        RHSRange = getConstantRangeFromMetadata(*Ranges);
+  // If we're interested in the false dest, invert the condition
+  ConstantRange TrueValues =
+      ConstantRange::makeAllowedICmpRegion(EdgePred, RHSRange);
 
-    // If we're interested in the false dest, invert the condition
-    CmpInst::Predicate Pred =
-            isTrueDest ? Predicate : CmpInst::getInversePredicate(Predicate);
-    ConstantRange TrueValues =
-            ConstantRange::makeAllowedICmpRegion(Pred, RHSRange);
+  if (Offset) // Apply the offset from above.
+    TrueValues = TrueValues.subtract(*Offset);
 
-    if (Offset) // Apply the offset from above.
-      TrueValues = TrueValues.subtract(Offset->getValue());
-
-    return ValueLatticeElement::getRange(std::move(TrueValues));
-  }
-
-  return ValueLatticeElement::getOverdefined();
+  return ValueLatticeElement::getRange(std::move(TrueValues));
 }
 
 // Handle conditions of the form

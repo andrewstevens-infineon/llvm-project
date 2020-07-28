@@ -111,6 +111,10 @@ public:
   bool legalizeSDIV_SREM32(MachineInstr &MI, MachineRegisterInfo &MRI,
                            MachineIRBuilder &B) const;
 
+  void legalizeUDIV_UREM64Impl(MachineIRBuilder &B,
+                               Register DstReg, Register Numer, Register Denom,
+                               bool IsDiv) const;
+
   bool legalizeUDIV_UREM64(MachineInstr &MI, MachineRegisterInfo &MRI,
                            MachineIRBuilder &B) const;
   bool legalizeSDIV_SREM(MachineInstr &MI, MachineRegisterInfo &MRI,
@@ -128,6 +132,9 @@ public:
                               MachineIRBuilder &B) const;
   bool legalizeFDIVFastIntrin(MachineInstr &MI, MachineRegisterInfo &MRI,
                               MachineIRBuilder &B) const;
+
+  bool getImplicitArgPtr(Register DstReg, MachineRegisterInfo &MRI,
+                         MachineIRBuilder &B) const;
 
   bool legalizeImplicitArgPtr(MachineInstr &MI, MachineRegisterInfo &MRI,
                               MachineIRBuilder &B) const;

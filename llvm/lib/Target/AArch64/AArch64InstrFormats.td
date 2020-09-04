@@ -1937,6 +1937,15 @@ class SignAuthTwoOperand<bits<4> opc, string asm,
   let Inst{4-0}   = Rd;
 }
 
+class ClearAuth<bits<1> data, string asm>
+  : I<(outs GPR64:$Rd), (ins GPR64:$Rn), asm, "\t$Rd", "$Rd = $Rn", []>, Sched<[]> {
+  bits<5> Rd;
+  let Inst{31-11} = 0b110110101100000101000;
+  let Inst{10} = data;
+  let Inst{9-5} = 0b11111;
+  let Inst{4-0} = Rd;
+}
+
 // Base class for the Armv8.4-A 8 and 16-bit flag manipulation instructions
 class BaseFlagManipulation<bit sf, bit sz, dag iops, string asm, string ops>
     : I<(outs), iops, asm, ops, "", []>,
@@ -7832,9 +7841,9 @@ class BaseSIMDThreeSameVectorBFDot<bit Q, bit U, string asm, string kind1,
 
 multiclass SIMDThreeSameVectorBFDot<bit U, string asm> {
   def v4bf16 : BaseSIMDThreeSameVectorBFDot<0, U, asm, ".2s", ".4h", V64,
-                                           v2f32, v8i8>;
+                                           v2f32, v4bf16>;
   def v8bf16 : BaseSIMDThreeSameVectorBFDot<1, U, asm, ".4s", ".8h", V128,
-                                           v4f32, v16i8>;
+                                           v4f32, v8bf16>;
 }
 
 class BaseSIMDThreeSameVectorBF16DotI<bit Q, bit U, string asm,
@@ -7852,7 +7861,7 @@ class BaseSIMDThreeSameVectorBF16DotI<bit Q, bit U, string asm,
                                  (InputType RegType:$Rn),
                                  (InputType (bitconvert (AccumType
                                     (AArch64duplane32 (v4f32 V128:$Rm),
-                                        VectorIndexH:$idx)))))))]> {
+                                        VectorIndexS:$idx)))))))]> {
 
   bits<2> idx;
   let Inst{21}    = idx{0};  // L
@@ -7862,16 +7871,16 @@ class BaseSIMDThreeSameVectorBF16DotI<bit Q, bit U, string asm,
 multiclass SIMDThreeSameVectorBF16DotI<bit U, string asm> {
 
   def v4bf16  : BaseSIMDThreeSameVectorBF16DotI<0, U, asm, ".2s", ".4h",
-                                               ".2h", V64, v2f32, v8i8>;
+                                               ".2h", V64, v2f32, v4bf16>;
   def v8bf16 : BaseSIMDThreeSameVectorBF16DotI<1, U, asm, ".4s", ".8h",
-                                              ".2h", V128, v4f32, v16i8>;
+                                              ".2h", V128, v4f32, v8bf16>;
 }
 
 class SIMDBF16MLAL<bit Q, string asm, SDPatternOperator OpNode>
   : BaseSIMDThreeSameVectorTied<Q, 0b1, 0b110, 0b11111, V128, asm, ".4s",
               [(set (v4f32 V128:$dst), (OpNode (v4f32 V128:$Rd),
-                                               (v16i8 V128:$Rn),
-                                               (v16i8 V128:$Rm)))]> {
+                                               (v8bf16 V128:$Rn),
+                                               (v8bf16 V128:$Rm)))]> {
   let AsmString = !strconcat(asm, "{\t$Rd.4s, $Rn.8h, $Rm.8h}");
 }
 
@@ -7881,10 +7890,10 @@ class SIMDBF16MLALIndex<bit Q, string asm, SDPatternOperator OpNode>
       "{\t$Rd.4s, $Rn.8h, $Rm.h$idx}", "$Rd = $dst",
           [(set (v4f32 V128:$dst),
                 (v4f32 (OpNode (v4f32 V128:$Rd),
-                               (v16i8 V128:$Rn),
-                               (v16i8 (bitconvert (v8bf16
+                               (v8bf16 V128:$Rn),
+                               (v8bf16
                                   (AArch64duplane16 (v8bf16 V128_lo:$Rm),
-                                      VectorIndexH:$idx)))))))]>,
+                                      VectorIndexH:$idx)))))]>,
     Sched<[WriteV]> {
   bits<5> Rd;
   bits<5> Rn;
@@ -7908,8 +7917,8 @@ class SIMDThreeSameVectorBF16MatrixMul<string asm>
                                 V128, asm, ".4s",
                           [(set (v4f32 V128:$dst),
                                 (int_aarch64_neon_bfmmla (v4f32 V128:$Rd),
-                                                         (v16i8 V128:$Rn),
-                                                         (v16i8 V128:$Rm)))]> {
+                                                         (v8bf16 V128:$Rn),
+                                                         (v8bf16 V128:$Rm)))]> {
   let AsmString = !strconcat(asm, "{\t$Rd", ".4s", ", $Rn", ".8h",
                                     ", $Rm", ".8h", "}");
 }

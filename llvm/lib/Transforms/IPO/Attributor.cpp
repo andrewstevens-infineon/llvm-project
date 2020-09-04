@@ -19,9 +19,12 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LazyValueInfo.h"
+#include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Verifier.h"
@@ -33,6 +36,7 @@
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <cassert>
@@ -87,11 +91,26 @@ static cl::opt<bool>
                                   "wrappers for non-exact definitions."),
                          cl::init(false));
 
+static cl::opt<bool>
+    AllowDeepWrapper("attributor-allow-deep-wrappers", cl::Hidden,
+                     cl::desc("Allow the Attributor to use IP information "
+                              "derived from non-exact functions via cloning"),
+                     cl::init(false));
+
+// These options can only used for debug builds.
+#ifndef NDEBUG
 static cl::list<std::string>
     SeedAllowList("attributor-seed-allow-list", cl::Hidden,
-                  cl::desc("Comma seperated list of attrbute names that are "
+                  cl::desc("Comma seperated list of attribute names that are "
                            "allowed to be seeded."),
                   cl::ZeroOrMore, cl::CommaSeparated);
+
+static cl::list<std::string> FunctionSeedAllowList(
+    "attributor-function-seed-allow-list", cl::Hidden,
+    cl::desc("Comma seperated list of function names that are "
+             "allowed to be seeded."),
+    cl::ZeroOrMore, cl::CommaSeparated);
+#endif
 
 static cl::opt<bool>
     DumpDepGraph("attributor-dump-dep-graph", cl::Hidden,
@@ -891,13 +910,15 @@ bool Attributor::checkForAllInstructions(function_ref<bool(Instruction &)> Pred,
 
   // TODO: use the function scope once we have call site AAReturnedValues.
   const IRPosition &QueryIRP = IRPosition::function(*AssociatedFunction);
-  const auto &LivenessAA =
-      getAAFor<AAIsDead>(QueryingAA, QueryIRP, /* TrackDependence */ false);
+  const auto *LivenessAA =
+      CheckBBLivenessOnly ? nullptr
+                          : &(getAAFor<AAIsDead>(QueryingAA, QueryIRP,
+                                                 /* TrackDependence */ false));
 
   auto &OpcodeInstMap =
       InfoCache.getOpcodeInstMapForFunction(*AssociatedFunction);
   if (!checkForAllInstructionsImpl(this, OpcodeInstMap, Pred, &QueryingAA,
-                                   &LivenessAA, Opcodes, CheckBBLivenessOnly))
+                                   LivenessAA, Opcodes, CheckBBLivenessOnly))
     return false;
 
   return true;
@@ -930,6 +951,7 @@ bool Attributor::checkForAllReadWriteInstructions(
 }
 
 void Attributor::runTillFixpoint() {
+  TimeTraceScope TimeScope("Attributor::runTillFixpoint");
   LLVM_DEBUG(dbgs() << "[Attributor] Identified and initialized "
                     << DG.SyntheticRoot.Deps.size()
                     << " abstract attributes.\n");
@@ -1066,6 +1088,7 @@ void Attributor::runTillFixpoint() {
 }
 
 ChangeStatus Attributor::manifestAttributes() {
+  TimeTraceScope TimeScope("Attributor::manifestAttributes");
   size_t NumFinalAAs = DG.SyntheticRoot.Deps.size();
 
   unsigned NumManifested = 0;
@@ -1128,6 +1151,7 @@ ChangeStatus Attributor::manifestAttributes() {
 }
 
 ChangeStatus Attributor::cleanupIR() {
+  TimeTraceScope TimeScope("Attributor::cleanupIR");
   // Delete stuff at the end to avoid invalid references and a nice order.
   LLVM_DEBUG(dbgs() << "\n[Attributor] Delete at least "
                     << ToBeDeletedFunctions.size() << " functions and "
@@ -1276,8 +1300,14 @@ ChangeStatus Attributor::cleanupIR() {
   for (Function *Fn : CGModifiedFunctions)
     CGUpdater.reanalyzeFunction(*Fn);
 
-  for (Function *Fn : ToBeDeletedFunctions)
+  for (Function *Fn : ToBeDeletedFunctions) {
+    if (!Functions.count(Fn))
+      continue;
     CGUpdater.removeFunction(*Fn);
+  }
+
+  if (!ToBeDeletedFunctions.empty())
+    ManifestChange = ChangeStatus::CHANGED;
 
   NumFnDeleted += ToBeDeletedFunctions.size();
 
@@ -1296,7 +1326,9 @@ ChangeStatus Attributor::cleanupIR() {
 }
 
 ChangeStatus Attributor::run() {
-  SeedingPeriod = false;
+  TimeTraceScope TimeScope("Attributor::run");
+
+  Phase = AttributorPhase::UPDATE;
   runTillFixpoint();
 
   // dump graphs on demand
@@ -1309,12 +1341,20 @@ ChangeStatus Attributor::run() {
   if (PrintDependencies)
     DG.print();
 
+  Phase = AttributorPhase::MANIFEST;
   ChangeStatus ManifestChange = manifestAttributes();
+
+  Phase = AttributorPhase::CLEANUP;
   ChangeStatus CleanupChange = cleanupIR();
+
   return ManifestChange | CleanupChange;
 }
 
 ChangeStatus Attributor::updateAA(AbstractAttribute &AA) {
+  TimeTraceScope TimeScope(AA.getName() + "::updateAA");
+  assert(Phase == AttributorPhase::UPDATE &&
+         "We can update AA only in the update stage!");
+
   // Use a new dependence vector for this update.
   DependenceVector DV;
   DependenceStack.push_back(&DV);
@@ -1403,6 +1443,52 @@ static void createShallowWrapper(Function &F) {
   ReturnInst::Create(Ctx, CI->getType()->isVoidTy() ? nullptr : CI, EntryBB);
 
   NumFnShallowWrapperCreated++;
+}
+
+/// Make another copy of the function \p F such that the copied version has
+/// internal linkage afterwards and can be analysed. Then we replace all uses
+/// of the original function to the copied one
+///
+/// Only non-exactly defined functions that have `linkonce_odr` or `weak_odr`
+/// linkage can be internalized because these linkages guarantee that other
+/// definitions with the same name have the same semantics as this one
+///
+static Function *internalizeFunction(Function &F) {
+  assert(AllowDeepWrapper && "Cannot create a copy if not allowed.");
+  assert(!F.isDeclaration() && !F.hasExactDefinition() &&
+         !GlobalValue::isInterposableLinkage(F.getLinkage()) &&
+         "Trying to internalize function which cannot be internalized.");
+
+  Module &M = *F.getParent();
+  FunctionType *FnTy = F.getFunctionType();
+
+  // create a copy of the current function
+  Function *Copied =
+      Function::Create(FnTy, GlobalValue::PrivateLinkage, F.getAddressSpace(),
+                       F.getName() + ".internalized");
+  ValueToValueMapTy VMap;
+  auto *NewFArgIt = Copied->arg_begin();
+  for (auto &Arg : F.args()) {
+    auto ArgName = Arg.getName();
+    NewFArgIt->setName(ArgName);
+    VMap[&Arg] = &(*NewFArgIt++);
+  }
+  SmallVector<ReturnInst *, 8> Returns;
+
+  // Copy the body of the original function to the new one
+  CloneFunctionInto(Copied, &F, VMap, /* ModuleLevelChanges */ false, Returns);
+
+  // Copy metadata
+  SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
+  F.getAllMetadata(MDs);
+  for (auto MDIt : MDs)
+    Copied->addMetadata(MDIt.first, *MDIt.second);
+
+  M.getFunctionList().insert(F.getIterator(), Copied);
+  F.replaceAllUsesWith(Copied);
+  Copied->setDSOLocal(true);
+
+  return Copied;
 }
 
 bool Attributor::isValidFunctionSignatureRewrite(
@@ -1505,9 +1591,17 @@ bool Attributor::registerFunctionSignatureRewrite(
 }
 
 bool Attributor::shouldSeedAttribute(AbstractAttribute &AA) {
-  if (SeedAllowList.size() == 0)
-    return true;
-  return std::count(SeedAllowList.begin(), SeedAllowList.end(), AA.getName());
+  bool Result = true;
+#ifndef NDEBUG
+  if (SeedAllowList.size() != 0)
+    Result =
+        std::count(SeedAllowList.begin(), SeedAllowList.end(), AA.getName());
+  Function *Fn = AA.getAnchorScope();
+  if (FunctionSeedAllowList.size() != 0 && Fn)
+    Result &= std::count(FunctionSeedAllowList.begin(),
+                         FunctionSeedAllowList.end(), Fn->getName());
+#endif
+  return Result;
 }
 
 ChangeStatus Attributor::rewriteFunctionSignatures(
@@ -1518,7 +1612,7 @@ ChangeStatus Attributor::rewriteFunctionSignatures(
     Function *OldFn = It.getFirst();
 
     // Deleted functions do not require rewrites.
-    if (ToBeDeletedFunctions.count(OldFn))
+    if (!Functions.count(OldFn) || ToBeDeletedFunctions.count(OldFn))
       continue;
 
     const SmallVectorImpl<std::unique_ptr<ArgumentReplacementInfo>> &ARIs =
@@ -1871,6 +1965,9 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
     // Every function might be simplified.
     getOrCreateAAFor<AAValueSimplify>(RetPos);
 
+    // Every returned value might be marked noundef.
+    getOrCreateAAFor<AANoUndef>(RetPos);
+
     if (ReturnType->isPointerTy()) {
 
       // Every function with pointer return type might be marked align.
@@ -1896,6 +1993,9 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
 
     // Every argument might be dead.
     getOrCreateAAFor<AAIsDead>(ArgPos);
+
+    // Every argument might be marked noundef.
+    getOrCreateAAFor<AANoUndef>(ArgPos);
 
     if (Arg.getType()->isPointerTy()) {
       // Every argument with pointer type might be marked nonnull.
@@ -1963,6 +2063,9 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
 
       // Call site argument might be simplified.
       getOrCreateAAFor<AAValueSimplify>(CBArgPos);
+
+      // Every call site argument might be marked "noundef".
+      getOrCreateAAFor<AANoUndef>(CBArgPos);
 
       if (!CB.getArgOperand(I)->getType()->isPointerTy())
         continue;
@@ -2071,6 +2174,22 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const AbstractAttribute &AA) {
   return OS;
 }
 
+raw_ostream &llvm::operator<<(raw_ostream &OS,
+                              const PotentialConstantIntValuesState &S) {
+  OS << "set-state(< {";
+  if (!S.isValidState())
+    OS << "full-set";
+  else {
+    for (auto &it : S.getAssumedSet())
+      OS << it << ", ";
+    if (S.undefIsContained())
+      OS << "undef ";
+  }
+  OS << "} >)";
+
+  return OS;
+}
+
 void AbstractAttribute::print(raw_ostream &OS) const {
   OS << "[";
   OS << getName();
@@ -2123,6 +2242,30 @@ static bool runAttributorOnFunctions(InformationCache &InfoCache,
     for (Function *F : Functions)
       if (!A.isFunctionIPOAmendable(*F))
         createShallowWrapper(*F);
+
+  // Internalize non-exact functions
+  // TODO: for now we eagerly internalize functions without calculating the
+  //       cost, we need a cost interface to determine whether internalizing
+  //       a function is "benefitial"
+  if (AllowDeepWrapper) {
+    unsigned FunSize = Functions.size();
+    for (unsigned u = 0; u < FunSize; u++) {
+      Function *F = Functions[u];
+      if (!F->isDeclaration() && !F->isDefinitionExact() && F->getNumUses() &&
+          !GlobalValue::isInterposableLinkage(F->getLinkage())) {
+        Function *NewF = internalizeFunction(*F);
+        Functions.insert(NewF);
+
+        // Update call graph
+        CGUpdater.replaceFunctionWith(*F, *NewF);
+        for (const Use &U : NewF->uses())
+          if (CallBase *CB = dyn_cast<CallBase>(U.getUser())) {
+            auto *CallerF = CB->getCaller();
+            CGUpdater.reanalyzeFunction(*CallerF);
+          }
+      }
+    }
+  }
 
   for (Function *F : Functions) {
     if (F->hasExactDefinition())
@@ -2224,7 +2367,9 @@ PreservedAnalyses AttributorCGSCCPass::run(LazyCallGraph::SCC &C,
   InformationCache InfoCache(M, AG, Allocator, /* CGSCC */ &Functions);
   if (runAttributorOnFunctions(InfoCache, Functions, AG, CGUpdater)) {
     // FIXME: Think about passes we will preserve and add them here.
-    return PreservedAnalyses::none();
+    PreservedAnalyses PA;
+    PA.preserve<FunctionAnalysisManagerCGSCCProxy>();
+    return PA;
   }
   return PreservedAnalyses::all();
 }

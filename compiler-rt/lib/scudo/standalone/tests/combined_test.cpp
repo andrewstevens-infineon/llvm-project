@@ -14,16 +14,18 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
 static std::mutex Mutex;
 static std::condition_variable Cv;
-static bool Ready = false;
+static bool Ready;
 
 static constexpr scudo::Chunk::Origin Origin = scudo::Chunk::Origin::Malloc;
 
-static void disableDebuggerdMaybe() {
+// Fuchsia complains that the function is not used.
+UNUSED static void disableDebuggerdMaybe() {
 #if SCUDO_ANDROID
   // Disable the debuggerd signal handler on Android, without this we can end
   // up spending a significant amount of time creating tombstones.
@@ -351,6 +353,7 @@ template <typename AllocatorT> static void stressAllocator(AllocatorT *A) {
 }
 
 template <class Config> static void testAllocatorThreaded() {
+  Ready = false;
   using AllocatorT = TestAllocator<Config>;
   auto Allocator = std::unique_ptr<AllocatorT>(new AllocatorT());
   std::thread Threads[32];
@@ -394,7 +397,7 @@ struct DeathConfig {
   typedef scudo::SizeClassAllocator64<DeathSizeClassMap, DeathRegionSizeLog>
       Primary;
   typedef scudo::MapAllocator<scudo::MapAllocatorNoCache> Secondary;
-  template <class A> using TSDRegistryT = scudo::TSDRegistrySharedT<A, 1U>;
+  template <class A> using TSDRegistryT = scudo::TSDRegistrySharedT<A, 1U, 1U>;
 };
 
 TEST(ScudoCombinedTest, DeathCombined) {

@@ -52,7 +52,6 @@ set(LLVM_TEST_DEPENDS
           UnitTests
           bugpoint
           count
-          extract
           llc
           lli
           lli-child-target
@@ -120,6 +119,7 @@ set(LLVM_TEST_DEPENDS
           opt
           sancov
           sanstats
+          split-file
           verify-uselistorder
           yaml-bench
           yaml2obj
@@ -153,6 +153,7 @@ if(LLVM_BUILD_EXAMPLES)
     Kaleidoscope-Ch5
     Kaleidoscope-Ch6
     Kaleidoscope-Ch7
+    LLJITWithThinLTOSummaries
     )
   if (NOT WIN32)
     list(APPEND LLVM_TEST_DEPENDS

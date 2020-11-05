@@ -36,6 +36,7 @@ class PassInstrumentor;
 
 namespace detail {
 struct OpPassManagerImpl;
+struct PassExecutionState;
 } // end namespace detail
 
 //===----------------------------------------------------------------------===//
@@ -47,8 +48,9 @@ struct OpPassManagerImpl;
 /// other OpPassManagers or the top-level PassManager.
 class OpPassManager {
 public:
-  OpPassManager(Identifier name, bool verifyPasses);
-  OpPassManager(StringRef name, bool verifyPasses);
+  enum class Nesting { Implicit, Explicit };
+  OpPassManager(Identifier name, Nesting nesting);
+  OpPassManager(StringRef name, Nesting nesting);
   OpPassManager(OpPassManager &&rhs);
   OpPassManager(const OpPassManager &rhs);
   ~OpPassManager();
@@ -103,7 +105,10 @@ public:
   /// of pipelines.
   /// Note: The quality of the string representation depends entirely on the
   /// the correctness of per-pass overrides of Pass::printAsTextualPipeline.
-  void printAsTextualPipeline(raw_ostream &os);
+  void printAsTextualPipeline(raw_ostream &os, bool filterVerifier = true);
+
+  /// Raw dump of the pass manager to llvm::errs().
+  void dump();
 
   /// Merge the pass statistics of this class into 'other'.
   void mergeStatisticsInto(OpPassManager &other);
@@ -119,6 +124,7 @@ private:
 
   /// Allow access to the constructor.
   friend class PassManager;
+  friend class Pass;
 
   /// Allow access.
   friend detail::OpPassManagerImpl;
@@ -144,8 +150,7 @@ enum class PassDisplayMode {
 /// The main pass manager and pipeline builder.
 class PassManager : public OpPassManager {
 public:
-  // If verifyPasses is true, the verifier is run after each pass.
-  PassManager(MLIRContext *ctx, bool verifyPasses = true);
+  PassManager(MLIRContext *ctx, Nesting nesting = Nesting::Explicit);
   ~PassManager();
 
   /// Run the passes within this manager on the provided module.
@@ -162,6 +167,9 @@ public:
   /// smallest pipeline.
   void enableCrashReproducerGeneration(StringRef outputFile,
                                        bool genLocalReproducer = false);
+
+  /// Runs the verifier after each individual pass.
+  void enableVerifier(bool enabled = true);
 
   //===--------------------------------------------------------------------===//
   // Instrumentations
@@ -325,6 +333,9 @@ private:
 
   /// Flag that specifies if the generated crash reproducer should be local.
   bool localReproducer : 1;
+
+  /// A flag that indicates if the IR should be verified in between passes.
+  bool verifyPasses : 1;
 };
 
 /// Register a set of useful command-line options that can be used to configure

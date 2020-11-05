@@ -40,15 +40,6 @@ extern int target(int64_t DeviceId, void *HostPtr, int32_t ArgNum,
 
 extern int CheckDeviceAndCtors(int64_t device_id);
 
-// enum for OMP_TARGET_OFFLOAD; keep in sync with kmp.h definition
-enum kmp_target_offload_kind {
-  tgt_disabled = 0,
-  tgt_default = 1,
-  tgt_mandatory = 2
-};
-typedef enum kmp_target_offload_kind kmp_target_offload_kind_t;
-extern kmp_target_offload_kind_t TargetOffloadPolicy;
-
 // This structure stores information of a mapped memory region.
 struct MapComponentInfoTy {
   void *Base;
@@ -95,5 +86,21 @@ int __kmpc_get_target_offload(void) __attribute__((weak));
 
 #define TARGET_NAME Libomptarget
 #define DEBUG_PREFIX GETNAME(TARGET_NAME)
+
+////////////////////////////////////////////////////////////////////////////////
+/// dump a table of all the host-target pointer pairs on failure
+static inline void dumpTargetPointerMappings(const DeviceTy &Device) {
+  if (Device.HostDataToTargetMap.empty())
+    return;
+
+  fprintf(stderr, "Device %d Host-Device Pointer Mappings:\n", Device.DeviceID);
+  fprintf(stderr, "%-18s %-18s %s\n", "Host Ptr", "Target Ptr", "Size (B)");
+  for (const auto &HostTargetMap : Device.HostDataToTargetMap) {
+    fprintf(stderr, DPxMOD " " DPxMOD " %lu\n",
+            DPxPTR(HostTargetMap.HstPtrBegin),
+            DPxPTR(HostTargetMap.TgtPtrBegin),
+            HostTargetMap.HstPtrEnd - HostTargetMap.HstPtrBegin);
+  }
+}
 
 #endif
